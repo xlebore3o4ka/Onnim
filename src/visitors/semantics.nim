@@ -1,0 +1,326 @@
+import ../core/[ast, types, tokens, errors]
+import std/[tables, sequtils]
+
+type
+  Symbol = object
+    definitionToken: Token
+    symbolType: Type
+
+  Scope = ref object
+    depth: Natural
+    symbolTable: Table[string, Symbol]
+    case isGlobal: bool
+    of false: parent: Scope
+    of true: discard
+
+  Context = ref object
+    currentScope: Scope
+    symbolScopeStack: Table[string, seq[Scope]]
+
+    loopDepth: Natural
+    funcDepth: Natural
+
+    expectedReturnType: Type
+
+proc newSymbol(self: Context, name: Token, symbolType: Type) =
+  self.currentScope.symbolTable[name.lexeme] = Symbol(definitionToken: name, symbolType: symbolType)
+  self.symbolScopeStack.mgetOrPut(name.lexeme, @[]).add(self.currentScope)
+
+proc pushScope(self: Context) =
+  let depth = self.currentScope.depth
+  self.currentScope = Scope(isGlobal: false, symbolTable: initTable[string, Symbol](), 
+    parent: self.currentScope, depth: depth + 1)
+
+proc popScope(self: Context) =
+  let scope = self.currentScope
+  for name in scope.symbolTable.keys:
+    discard self.symbolScopeStack[name].pop()
+  self.currentScope = scope.parent
+
+proc getSymbol(self: Context, name: string): Symbol =
+  let scope = self.symbolScopeStack[name][^1]
+  result = scope.symbolTable[name]
+
+proc symbolExists(self: Context, name: string): bool =
+  let exists = name in self.symbolScopeStack and self.symbolScopeStack[name].len > 0
+  return exists
+
+proc symbolExistsInCurrentScope(self: Context, name: string): bool =
+  let exists = name in self.currentScope.symbolTable
+  return exists
+
+proc visit(ctx: Context, node: Expression)
+proc visit(ctx: Context, node: Statement)
+
+proc setType(node: Expression, ctx: Context, exprType: Type) {.inline.} =
+  node.exprType = exprType
+
+proc isInteger(typ: TypeKind): bool {.inline.} = typ in {typeInt64}
+proc isInteger(typ: Type):     bool {.inline.} = isInteger(typ.kind)
+
+proc visitNumberExpression(ctx: Context, node: NumberExpression) =
+  node.setType(ctx, getInt64Type())
+
+proc visitBoolExpression(ctx: Context, node: BoolExpression) =
+  node.setType(ctx, getBoolType())
+
+proc visitUnaryExpression(ctx: Context, node: UnaryExpression) =
+  ctx.visit(node.value)
+  let op  = node.token.kind
+  let typ = node.value.exprType
+
+  if typ.isInteger() and op in {tkPlus, tkMinus}:
+    node.setType(ctx, node.value.exprType)
+
+  elif typ.eq(typeBool) and op == tkBang:
+    node.setType(ctx, node.value.exprType)
+
+  else:
+    newError(errUnaryTypeMismatch, node.token, node.token.lexeme, typ)
+
+proc visitBinaryExpression(ctx: Context, node: BinaryExpression) =
+  ctx.visit(node.left)
+  ctx.visit(node.right)
+
+  block typeSemantics:
+    if node.left.exprType.neq node.right.exprType:
+      newError(errBinaryTypeMismatch, node.token, node.token.lexeme, node.left.exprType, node.right.exprType)
+      break typeSemantics
+
+    var typ = node.left.exprType
+    let op  = node.token.kind
+
+    block opSemantics:
+      if   typ.isInteger() and op in {tkPlus, tkMinus, tkStar, tkSlash, tkPercent}: 
+        break opSemantics
+      elif typ.isInteger() and op in {tkGT, tkLT, tkGTE, tkLTE, tkEqualsEquals, tkBangEquals}: 
+        typ = getBoolType()
+        break opSemantics
+      elif typ.eq(getBoolType()) and op in {tkAnd, tkOr, tkEqualsEquals, tkBangEquals}: 
+        break opSemantics
+
+      newError(errBinaryTypeMismatch, node.token, node.token.lexeme, node.left.exprType, node.right.exprType)
+      break typeSemantics
+    
+    node.setType(ctx, typ)
+
+proc visitIdentExpression(ctx: Context, node: IdentExpression) =
+  let name = node.token.lexeme
+
+  if not ctx.symbolExists(name):
+    newError(errUndeclaredSymbol, node.token, name)
+
+  else:
+    node.setType(ctx, ctx.getSymbol(name).symbolType)
+    node.token.lexeme = node.token.lexeme & "_"
+
+proc visitCallExpression(ctx: Context, node: CallExpression) =
+  ctx.visit(node.value)
+
+  let valueType = node.value.exprType
+
+  block semantics:
+    if valueType.neq typeFunc:
+      newError(errCallNonFunc, node.value.token, valueType)
+      break semantics
+
+    if valueType.argTypes.len != node.args.len:
+      newError(errCallArgCount, node.value.token, valueType.argTypes.len, node.args.len)
+      break semantics
+
+    for idx in 0..<node.args.len:
+      let expected = valueType.argTypes[idx]
+      let arg = node.args[idx]
+
+      ctx.visit(arg)
+
+      if expected.neq arg.exprType:
+        newError(errCallArgType, arg.token, expected, arg.exprType)
+        break semantics
+
+    node.setType(ctx, valueType.returnType)
+
+
+# STATEMENTS
+
+
+proc visitBlockStatement(ctx: Context, node: BlockStatement) =
+  for stmt in node.statements:
+    ctx.visit(stmt)
+
+proc visitDeclarationStatement(ctx: Context, node: DeclarationStatement) =
+  ctx.visit(node.value)
+
+  block semantics:
+    if node.value.exprType.neq node.valueType:
+      newError(errDeclarationTypeMismatch, node.token, node.valueType, node.name.lexeme, node.value.exprType)
+      break semantics
+
+    if ctx.symbolExistsInCurrentScope(node.name.lexeme):
+      let symbol = ctx.getSymbol(node.name.lexeme)
+      let symbolToken = symbol.definitionToken
+      newError(errRedeclaration, node.name, symbolToken.lexeme, symbolToken.file, symbolToken.line, symbolToken.col)
+      break semantics
+
+    ctx.newSymbol(node.name, node.valueType)
+    node.name.lexeme = node.name.lexeme & "_"
+
+proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement) =
+  ctx.visit(node.left)
+  ctx.visit(node.right)
+
+  if node.left.exprType.neq node.right.exprType:
+    newError(errTypeMismatch, node.token, node.left.exprType, node.right.exprType)
+
+proc visitBranchingStatement(ctx: Context, node: BranchingStatement) =
+  ctx.visit(node.condition)
+  if node.condition.exprType.neq(getBoolType()):
+    newError(errTypeMismatch, node.condition.token, node.condition.exprType, getBoolType())
+  
+  else:
+    ctx.pushScope()
+    ctx.visit(node.ifBlock)
+    ctx.popScope()
+  
+  for elifBranch in node.elifBranches:
+    ctx.visit(elifBranch.cond)
+    if elifBranch.cond.exprType.neq(getBoolType()):
+      newError(errTypeMismatch, elifBranch.cond.token, elifBranch.cond.exprType, getBoolType())
+
+    else:
+      ctx.pushScope()
+      ctx.visit(elifBranch.elifBlock)
+      ctx.popScope()
+  
+  if node.elseBlock != nil:
+    ctx.pushScope()
+    ctx.visit(node.elseBlock)
+    ctx.popScope()
+
+proc visitWhileStatement(ctx: Context, node: WhileStatement) =
+  ctx.visit(node.condition)
+  if node.condition.exprType.neq(getBoolType()):
+    newError(errTypeMismatch, node.condition.token, node.condition.exprType, getBoolType())
+
+  else:
+    ctx.pushScope()
+    ctx.loopDepth.inc
+    ctx.visit(node.whileBlock)
+    ctx.loopDepth.dec
+    ctx.popScope()
+
+proc visitContinueStatement(ctx: Context, node: ContinueStatement) =
+  if ctx.loopDepth == 0:
+    newError(errControlFlowOutsideLoop, node.token, "continue")
+
+proc visitBreakStatement(ctx: Context, node: BreakStatement) =
+  if ctx.loopDepth == 0:
+    newError(errControlFlowOutsideLoop, node.token, "break")
+
+proc checkReturnPaths(stmt: Statement): bool =
+  case stmt.kind:
+  of stmtReturn:
+    return true
+  of stmtBlock:
+    let blockStmt = BlockStatement(stmt)
+    for s in blockStmt.statements:
+      if checkReturnPaths(s):
+        return true
+    return false
+  of stmtBranching:
+    let branchStmt = BranchingStatement(stmt)
+    var hasElse = branchStmt.elseBlock != nil
+    for elifBranch in branchStmt.elifBranches:
+      if checkReturnPaths(elifBranch.elifBlock):
+        return true
+    if branchStmt.ifBlock != nil and checkReturnPaths(branchStmt.ifBlock):
+      return true
+    if hasElse and checkReturnPaths(branchStmt.elseBlock):
+      return true
+    return false
+  of stmtWhile:
+    return false
+  else:
+    return false
+
+proc visitFuncStatement(ctx: Context, node: FuncStatement) =
+  if ctx.symbolExistsInCurrentScope(node.name.lexeme):
+    let symbol = ctx.getSymbol(node.name.lexeme)
+    newError(errRedeclaration, node.name, symbol.definitionToken.lexeme, symbol.definitionToken.file, symbol.definitionToken.line, symbol.definitionToken.col)
+    return
+
+  let funcType = getFuncType(node.args.mapIt(it.argType), node.returnType)
+  ctx.newSymbol(node.name, funcType)
+  let name = node.name.lexeme
+  node.name.lexeme = node.name.lexeme & "_"
+
+  ctx.pushScope()
+  ctx.funcDepth.inc
+  
+  for arg in node.args:
+    ctx.newSymbol(arg.argToken, arg.argType)
+    arg.argToken.lexeme = arg.argToken.lexeme & "_"
+  
+  let expected = ctx.expectedReturnType
+  ctx.expectedReturnType = node.returnType
+
+  if not ctx.expectedReturnType.eq(getUndefinedType()):
+    if not checkReturnPaths(node.funcBlock):
+      newError(errMissingReturn, node.name, name)
+
+  ctx.visit(node.funcBlock)
+
+  ctx.expectedReturnType = expected
+  
+  ctx.funcDepth.dec
+  ctx.popScope()
+
+proc visitReturnStatement(ctx: Context, node: ReturnStatement) =
+  if ctx.funcDepth == 0:
+    newError(errReturnOutsideFunc, node.token)
+    return
+
+  if ctx.expectedReturnType.eq(getUndefinedType()):
+    if node.value != nil:
+      newError(errReturnValue, node.token)
+  else:
+    if node.value == nil:
+      newError(errReturnTypeMismatch, node.token, ctx.expectedReturnType, getUndefinedType())
+    else:
+      ctx.visit(node.value)
+      if node.value.exprType.neq(ctx.expectedReturnType):
+        newError(errReturnTypeMismatch, node.token, ctx.expectedReturnType, node.value.exprType)
+
+proc visit(ctx: Context, node: Expression) =
+  case node.kind:
+  of exprNumber: visitNumberExpression(ctx, NumberExpression(node))
+  of exprBool: visitBoolExpression(ctx, BoolExpression(node))
+  of exprUnary: visitUnaryExpression(ctx, UnaryExpression(node))
+  of exprBinary: visitBinaryExpression(ctx, BinaryExpression(node))
+  of exprIdent: visitIdentExpression(ctx, IdentExpression(node))
+  of exprCall: visitCallExpression(ctx, CallExpression(node))
+  else: discard
+
+proc visit(ctx: Context, node: Statement) =
+  case node.kind:
+  of stmtBlock: visitBlockStatement(ctx, BlockStatement(node))
+  of stmtDeclaration: visitDeclarationStatement(ctx, DeclarationStatement(node))
+  of stmtAssignment: visitAssignmentStatement(ctx, AssignmentStatement(node))
+  of stmtBranching: visitBranchingStatement(ctx, BranchingStatement(node))
+  of stmtWhile: visitWhileStatement(ctx, WhileStatement(node))
+  of stmtContinue: visitContinueStatement(ctx, ContinueStatement(node))
+  of stmtBreak: visitBreakStatement(ctx, BreakStatement(node))
+  of stmtFunc: visitFuncStatement(ctx, FuncStatement(node))
+  of stmtReturn: visitReturnStatement(ctx, ReturnStatement(node))
+  else: discard
+
+proc checkSemantics*(node: Statement) =
+  var ctx = Context(
+    currentScope: Scope(
+      depth: 0,
+      isGlobal: true,
+      symbolTable: initTable[string, Symbol]()
+    ),
+    symbolScopeStack: initTable[string, seq[Scope]]()
+  )
+  ctx.visit(node)

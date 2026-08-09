@@ -2,11 +2,11 @@
 
 version       = "0.1.0"
 author        = "xlebore3o4ka"
-description   = "A new awesome nimble package"
+description   = "-"
 license       = "AGPL-3.0-or-later"
 srcDir        = "src"
 binDir        = "bin"
-bin           = @["SimpleRuntime"]
+bin           = @["onnim"]
 
 # Dependencies
 
