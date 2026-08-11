@@ -22,6 +22,8 @@ type
 
     expectedReturnType: Type
 
+template ident(name: string): string = "`" & name & "`"
+
 proc newSymbol(self: Context, name: Token, symbolType: Type) =
   self.currentScope.symbolTable[name.lexeme] = Symbol(definitionToken: name, symbolType: symbolType)
   self.symbolScopeStack.mgetOrPut(name.lexeme, @[]).add(self.currentScope)
@@ -55,7 +57,7 @@ proc visit(ctx: Context, node: Statement)
 proc setType(node: Expression, ctx: Context, exprType: Type) {.inline.} =
   node.exprType = exprType
 
-proc isInteger(typ: TypeKind): bool {.inline.} = typ in {typeInt64}
+proc isInteger(typ: TypeKind): bool {.inline.} = typ in {typeInt}
 proc isInteger(typ: Type):     bool {.inline.} = isInteger(typ.kind)
 
 proc visitNumberExpression(ctx: Context, node: NumberExpression) =
@@ -112,7 +114,7 @@ proc visitIdentExpression(ctx: Context, node: IdentExpression) =
 
   else:
     node.setType(ctx, ctx.getSymbol(name).symbolType)
-    node.token.lexeme = node.token.lexeme & "_"
+    node.token.lexeme = ident(node.token.lexeme)
 
 proc visitCallExpression(ctx: Context, node: CallExpression) =
   ctx.visit(node.value)
@@ -163,7 +165,7 @@ proc visitDeclarationStatement(ctx: Context, node: DeclarationStatement) =
       break semantics
 
     ctx.newSymbol(node.name, node.valueType)
-    node.name.lexeme = node.name.lexeme & "_"
+    node.name.lexeme = ident(node.name.lexeme)
 
 proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement) =
   ctx.visit(node.left)
@@ -252,14 +254,14 @@ proc visitFuncStatement(ctx: Context, node: FuncStatement) =
   let funcType = getFuncType(node.args.mapIt(it.argType), node.returnType)
   ctx.newSymbol(node.name, funcType)
   let name = node.name.lexeme
-  node.name.lexeme = node.name.lexeme & "_"
+  node.name.lexeme = ident(node.name.lexeme)
 
   ctx.pushScope()
   ctx.funcDepth.inc
   
   for arg in node.args:
     ctx.newSymbol(arg.argToken, arg.argType)
-    arg.argToken.lexeme = arg.argToken.lexeme & "_"
+    arg.argToken.lexeme = ident(arg.argToken.lexeme)
   
   let expected = ctx.expectedReturnType
   ctx.expectedReturnType = node.returnType

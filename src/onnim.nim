@@ -1,6 +1,6 @@
-import std/[os, parseopt]
+import std/[os, osproc, parseopt]
 import core/[errors, parser]
-import visitors/[semantics]
+import visitors/[semantics, codegen]
 
 proc main() =
   var
@@ -27,26 +27,26 @@ proc main() =
   let content = readFile(filename)
   var parser = newParser(content, filename)
 
-  let expression = parser.parse()
+  let code = parser.parse()
 
   block errorProne:
     if errors.errors.len != 0: break errorProne
-    checkSemantics(expression)
+    checkSemantics(code)
 
-    # if errors.errors.len != 0: break errorProne
-    # let code = generate(expression, release)
+    if errors.errors.len != 0: break errorProne
+    let code = generateCode(code)
 
-    # if errors.errors.len != 0: break errorProne
+    if errors.errors.len != 0: break errorProne
     
-    # let outputFile = filename.changeFileExt("")
-    # let cFile = outputFile & ".c"
-    # let exeFile = outputFile & (when defined(windows): ".exe" else: "")
+    let outputFile = filename.changeFileExt("")
+    let nimFile = outputFile & ".nim"
+    let exeFile = outputFile & (when defined(windows): ".exe" else: "")
     
-    # writeFile(cFile, code)
+    writeFile(nimFile, code)
     
-    # let gccCmd = "gcc -O" & (if release: "2 -s" else: "0") & " -o " & exeFile & " " & cFile
-    # if execCmd(gccCmd) != 0:
-    #   echo "Compilation failed"
+    let nimCmd = "nim c -o:" & exeFile & " " & nimFile
+    if execCmd(nimCmd) != 0:
+      echo "Compilation failed [" & nimCmd & "]"
 
   if errors.errors.len != 0:
     for e in errors.errors:

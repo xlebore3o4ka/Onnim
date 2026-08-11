@@ -4,7 +4,7 @@ type
   TypeKind* = enum
     typeUndefined
 
-    typeInt64
+    typeInt
 
     typeBool
 
@@ -19,7 +19,7 @@ type
 
 let
   undefinedType* = Type(kind: typeUndefined)
-  int64Type* = Type(kind: typeInt64)
+  int64Type* = Type(kind: typeInt)
   boolType* = Type(kind: typeBool)
 var
   funcTypes*: seq[Type]
@@ -63,7 +63,7 @@ proc getFuncType*(argTypes: seq[Type], returnType: Type): Type =
 proc `$`*(k: TypeKind): string =
   case k
   of typeUndefined: "undefined"
-  of typeInt64:     "int64"
+  of typeInt:       "int"
 
   of typeBool:      "bool"
   of typeFunc:      "T(T, ...)"
