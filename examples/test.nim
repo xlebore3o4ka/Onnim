@@ -1,8 +1,3 @@
+import /home/xlebore3o4ka/nimProjects/Onnim/src/std/system
 block `run`:
-  var `x`: int = 10
-  var `y`: int = 0
-  if `x` == 5:
-    `y` = 1
-  else:
-    `y` = 0
-
+  var `x`: ptr int = onnim_add(10)

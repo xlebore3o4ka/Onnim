@@ -1,8 +1,1 @@
-int x = 10
-int y = 0
-
-if x == 5 do
-  y = 1
-else do
-  y = 0
-end
+int* x = @10

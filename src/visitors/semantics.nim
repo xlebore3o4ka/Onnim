@@ -71,7 +71,10 @@ proc visitUnaryExpression(ctx: Context, node: UnaryExpression) =
   let op  = node.token.kind
   let typ = node.value.exprType
 
-  if typ.isInteger() and op in {tkPlus, tkMinus}:
+  if op == tkAt:
+    node.setType(ctx, getObjType(node.value.exprType))
+
+  elif typ.isInteger() and op in {tkPlus, tkMinus}:
     node.setType(ctx, node.value.exprType)
 
   elif typ.eq(typeBool) and op == tkBang:

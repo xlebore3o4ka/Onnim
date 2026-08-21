@@ -1,5 +1,5 @@
-import ../core/[ast, types]
-import std/[strformat, sequtils, strutils]
+import ../core/[ast, types, tokens]
+import std/[strformat, sequtils, strutils, os]
 
 const apiprefix = "onnim"
 
@@ -18,11 +18,16 @@ proc nimtype(t: Type): string =
   of typeFunc: 
     var args: string
     for i, argt in t.argTypes:
+      if i != 0: args &= ", "
       args &= fmt"arg{i}: {nimtype(argt)}"
     if t.returnType.neq getUndefinedType():
       return fmt"proc ({args}): {t.returnType}"
     return fmt"proc ({args})"
-  else: return fmt"auto #[{apiprefix} unsupported type]#"
+  of typeObj:
+    return fmt"ptr {nimtype(t.objBase)}"
+  else: 
+    echo "Unhandled type: ", t 
+    quit(1)
 
 proc visit(ctx: Context, node: Expression): string
 proc visit(ctx: Context, node: Statement): string
@@ -34,10 +39,15 @@ proc visitBoolExpression(ctx: Context, node: BoolExpression): string =
   return node.token.lexeme
 
 proc visitUnaryExpression(ctx: Context, node: UnaryExpression): string =
-  return "-" & ctx.visit(node.value)
+  if node.token.kind == tkAt:
+    return apicall("add", ctx.visit(node.value))
+  return node.token.lexeme & ctx.visit(node.value)
 
 proc visitBinaryExpression(ctx: Context, node: BinaryExpression): string =
-  return fmt"{ctx.visit(node.left)} {node.token.lexeme} {ctx.visit(node.right)}"
+  var op = node.token.lexeme
+  if node.token.kind == tkPercent:
+    op = "mod"
+  return fmt"{ctx.visit(node.left)} {op} {ctx.visit(node.right)}"
 
 proc visitIdentExpression(ctx: Context, node: IdentExpression): string =
   return node.token.lexeme
@@ -48,7 +58,7 @@ proc visitCallExpression(ctx: Context, node: CallExpression): string =
   return fmt"{fn}({args})"
 
 proc visitBlockStatement(ctx: Context, node: BlockStatement): string =
-  result = ":\n"
+  result = "\n"
   ctx.indent += 1
   for stmt in node.statements:
     result &= indent(ctx) & ctx.visit(stmt) & "\n"
@@ -61,26 +71,35 @@ proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement): string =
   result = fmt"{ctx.visit(node.left)} = {ctx.visit(node.right)}"
 
 proc visitBranchingStatement(ctx: Context, node: BranchingStatement): string =
-  result = fmt"if {ctx.visit(node.condition)}{ctx.visit(node.ifBlock)}"
+  result = fmt"if {ctx.visit(node.condition)}:{ctx.visit(node.ifBlock)}"
   for (cond, elifBlock) in node.elifBranches:
-    result &= indent(ctx) & fmt"elif {ctx.visit(cond)}{ctx.visit(elifBlock)}"
+    result &= indent(ctx) & fmt"elif {ctx.visit(cond)}:{ctx.visit(elifBlock)}"
   if node.elseBlock != nil:
-    result &= indent(ctx) & fmt"else{ctx.visit(node.elseBlock)}"
+    result &= indent(ctx) & fmt"else:{ctx.visit(node.elseBlock)}"
 
 proc visitWhileStatement(ctx: Context, node: WhileStatement): string =
-  discard
+  result = fmt"while {ctx.visit(node.condition)}:{ctx.visit(node.whileBlock)}"
 
 proc visitContinueStatement(ctx: Context, node: ContinueStatement): string =
-  discard
+  result = "continue"
 
 proc visitBreakStatement(ctx: Context, node: BreakStatement): string =
-  discard
+  result = "break"
 
 proc visitFuncStatement(ctx: Context, node: FuncStatement): string =
-  discard
+  result = fmt"proc {node.name.lexeme}("
+  for i, arg in node.args:
+    if i != 0: result &= ", "
+    result &= fmt"{arg.argToken.lexeme}: {nimtype(arg.argType)}"
+  result &= ")"
+  if node.returnType != getUndefinedType():
+    result &= fmt": {nimtype(node.returnType)}"
+  result &= fmt" = {ctx.visit(node.funcBlock)}"
 
 proc visitReturnStatement(ctx: Context, node: ReturnStatement): string =
-  discard
+  if node.value == nil:
+    return "return"
+  result = fmt"return {ctx.visit(node.value)}"
 
 proc visit(ctx: Context, node: Expression): string =
   case node.kind:
@@ -107,4 +126,4 @@ proc visit(ctx: Context, node: Statement): string =
 
 proc generateCode*(node: Statement): string =
   var ctx = Context()
-  return "block `run`" & ctx.visit(node)
+  return &"import {currentSourcePath().absolutePath()}/src/std/system\nblock `run`:" & ctx.visit(node)

@@ -9,12 +9,15 @@ type
     typeBool
 
     typeFunc
+    typeObj
 
   Type* = ref object
     case kind*: TypeKind
     of typeFunc:
       argTypes*: seq[Type]
       returnType*: Type
+    of typeObj:
+      objBase*: Type
     else: discard
 
 let
@@ -23,6 +26,7 @@ let
   boolType* = Type(kind: typeBool)
 var
   funcTypes*: seq[Type]
+  objTypes*: seq[Type]
 
 proc eq*(a: Type, b: Type): bool =
   if a == nil or b == nil: return false
@@ -32,6 +36,8 @@ proc eq*(a: Type, b: Type): bool =
     for i in 0..<a.argTypes.len:
       if not eq(a.argTypes[i], b.argTypes[i]): return false
     return eq(a.returnType, b.returnType)
+  if a.kind == typeObj:
+    return eq(a.objBase, b.objBase)
   return true
 
 proc eq*(a: Type, b: TypeKind): bool {.inline.} =
@@ -54,10 +60,18 @@ proc getBoolType*():      Type {.inline.} = boolType
 
 proc getFuncType*(argTypes: seq[Type], returnType: Type): Type =
   for funcType in funcTypes:
-    if funcType.kind == typeFunc and funcType.argTypes == argTypes and eq(funcType.returnType, returnType):
+    if funcType.argTypes == argTypes and eq(funcType.returnType, returnType):
       return funcType
   
   result = Type(kind: typeFunc, argTypes: argTypes, returnType: returnType)
+  funcTypes.add(result)
+
+proc getObjType*(baseType: Type): Type =
+  for objType in objTypes:
+    if eq(objType.objBase, baseType):
+      return objType
+  
+  result = Type(kind: typeObj, objBase: baseType)
   funcTypes.add(result)
 
 proc `$`*(k: TypeKind): string =
@@ -67,6 +81,7 @@ proc `$`*(k: TypeKind): string =
 
   of typeBool:      "bool"
   of typeFunc:      "T(T, ...)"
+  of typeObj:       "T*"
 
 proc `$`*(t: Type): string =
   if t == nil: return "nilType"
@@ -76,4 +91,6 @@ proc `$`*(t: Type): string =
     for arg in t.argTypes:
       args.add($arg)
     return $t.returnType & "(" & args.join(", ") & ")"
+  of typeObj:
+    return $t.objBase & "*"
   else: return $t.kind

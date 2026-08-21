@@ -43,7 +43,7 @@ proc parseType(self: var Parser, token: Token): Type =
     newError(errType, token, token.mean)
     result = getUndefinedType()
 
-  while self.peekToken().kind in {tkLParen}:
+  while self.peekToken().kind in {tkLParen, tkStar}:
     let tok = self.nextToken()
 
     if tok.kind == tkLParen:
@@ -57,6 +57,9 @@ proc parseType(self: var Parser, token: Token): Type =
 
       discard self.expectToken(tkRParen)
       result = getFuncType(argTypes, result)
+
+    elif tok.kind == tkStar:
+      result = getObjType(result)
 
 proc parseExpression(self: var Parser): Expression
 
@@ -82,7 +85,7 @@ proc parsePrimary(self: var Parser): Expression =
 
 proc parsePrefix(self: var Parser): Expression =
   let token = self.peekToken()
-  if token.kind in {tkPlus, tkMinus, tkBang}:
+  if token.kind in {tkPlus, tkMinus, tkBang, tkAt}:
     self.skipToken()
     return newUnaryExpression(token, self.parsePrefix())
 
