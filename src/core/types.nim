@@ -90,7 +90,7 @@ proc `$`*(t: Type): string =
     var args: seq[string]
     for arg in t.argTypes:
       args.add($arg)
-    return $t.returnType & "(" & args.join(", ") & ")"
+    return (if t.returnType.neq typeUndefined: $t.returnType else: "_") & "(" & args.join(", ") & ")"
   of typeObj:
     return $t.objBase & "*"
   else: return $t.kind

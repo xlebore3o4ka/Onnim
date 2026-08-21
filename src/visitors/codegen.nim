@@ -40,7 +40,7 @@ proc visitBoolExpression(ctx: Context, node: BoolExpression): string =
 
 proc visitUnaryExpression(ctx: Context, node: UnaryExpression): string =
   if node.token.kind == tkAt:
-    return apicall("add", ctx.visit(node.value))
+    return apicall("addArena", ctx.visit(node.value))
   return node.token.lexeme & ctx.visit(node.value)
 
 proc visitBinaryExpression(ctx: Context, node: BinaryExpression): string =
@@ -101,6 +101,9 @@ proc visitReturnStatement(ctx: Context, node: ReturnStatement): string =
     return "return"
   result = fmt"return {ctx.visit(node.value)}"
 
+proc visitCallStatement(ctx: Context, node: CallStatement): string =
+  return (if node.expr.exprType.neq getUndefinedType(): "discard " else: "") & ctx.visit(node.expr)
+
 proc visit(ctx: Context, node: Expression): string =
   case node.kind:
   of exprNumber: return visitNumberExpression(ctx, NumberExpression(node))
@@ -122,8 +125,9 @@ proc visit(ctx: Context, node: Statement): string =
   of stmtBreak: return visitBreakStatement(ctx, BreakStatement(node))
   of stmtFunc: return visitFuncStatement(ctx, FuncStatement(node))
   of stmtReturn: return visitReturnStatement(ctx, ReturnStatement(node))
+  of stmtCall: return visitCallStatement(ctx, CallStatement(node))
   else: discard
 
 proc generateCode*(node: Statement): string =
   var ctx = Context()
-  return &"import {currentSourcePath().absolutePath()}/src/std/system\nblock `run`:" & ctx.visit(node)
+  return &"import {currentSourcePath().absolutePath()}/src/std/[system, builtins]\nblock `transpiled`:" & ctx.visit(node)

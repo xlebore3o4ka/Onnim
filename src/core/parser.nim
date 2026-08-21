@@ -274,6 +274,9 @@ proc parseStatement(self: var Parser): Statement =
     if expr.kind in {exprIdent} and self.peekToken().kind == tkEquals:
       return newAssignmentStatement(self.nextToken(), expr, self.parseExpression())
 
+    elif expr.kind == exprCall:
+      return newCallStatement(expr.token, CallExpression(expr))
+
   self.newError(errStatement, token, token.mean())
   return newInvalidStatement(token)
 

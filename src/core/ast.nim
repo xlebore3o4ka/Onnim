@@ -23,43 +23,33 @@ proc getPragmas(n: NimNode): NimNode =
   newEmptyNode()
 
 proc makeConstructor(typeName, kindValue, objectTy: NimNode): NimNode =
-
   let parentType = objectTy[1][0]
-
   var params: seq[NimNode] = @[]
-
   params.add typeName
-
   params.add newIdentDefs(
     ident("token"),
     ident("Token")
   )
 
   var body = newStmtList()
-
   body.add quote do:
     new(result)
-
   body.add quote do:
     result.kind = `kindValue`
-
   body.add quote do:
     result.token = token
 
   if objectTy[2].kind == nnkRecList:
     for field in objectTy[2]:
-
       if field.kind != nnkIdentDefs:
         continue
-
+        
       let fieldType = field[1]
       let fieldName = unstar(field[0])
-
       params.add newIdentDefs(
         fieldName,
         fieldType
       )
-
       body.add quote do:
         result.`fieldName` = `fieldName`
 
@@ -90,65 +80,46 @@ proc isAstNode(objectTy: NimNode): bool =
 
 macro constructors*(body: untyped): untyped =
   result = newStmtList()
-
   result.add body
-
   for section in body:
-
     if section.kind != nnkTypeSection:
       continue
 
-
     for typeDef in section:
-
       if typeDef.kind != nnkTypeDef:
         continue
-
 
       let nameNode = typeDef[0]
       let refNode = typeDef[2]
 
-
       if refNode.kind != nnkRefTy:
         continue
 
-
       let objectTy = refNode[0]
-
 
       if objectTy.kind != nnkObjectTy:
         continue
 
-
       if objectTy[1].kind != nnkOfInherit:
         continue
-
       if not isAstNode(objectTy):
         continue
 
-
       let pragmas = getPragmas(nameNode)
-
       var kindValue: NimNode = nil
 
-
       if pragmas.kind == nnkPragma:
-
         for p in pragmas:
-
           if p.kind == nnkExprColonExpr and
              eqIdent(p[0], "kovynode"):
-
             kindValue = p[1]
             break
-
 
       if kindValue.isNil:
         error(
           "Missing {.kovynode: ... .}",
           typeDef
         )
-
 
       result.add makeConstructor(
         getTypeName(nameNode),
@@ -171,7 +142,7 @@ constructors:
       exprCall
 
       stmtInvalid, stmtBlock, stmtDeclaration, stmtAssignment, stmtBranching
-      stmtWhile, stmtContinue, stmtBreak, stmtFunc, stmtReturn
+      stmtWhile, stmtContinue, stmtBreak, stmtFunc, stmtReturn, stmtCall
 
     Expression* = ref object of RootObj
       kind*: NodeKind
@@ -267,3 +238,8 @@ constructors:
       ## return [value]
       ## return = token
       value*: Expression
+
+    CallStatement* {.kovynode: stmtCall.} = ref object of Statement
+      ## <expr>
+      ## ( = token
+      expr*: CallExpression

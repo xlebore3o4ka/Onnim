@@ -1,5 +1,5 @@
 import ../core/[ast, types, tokens, errors]
-import std/[tables, sequtils]
+import std/[tables, sequtils, strutils]
 
 type
   Symbol = object
@@ -22,7 +22,7 @@ type
 
     expectedReturnType: Type
 
-template ident(name: string): string = "`" & name & "`"
+template ident(name: string): string = "`" & (if not name.endswith("_"): name else: name & "X") & "`"
 
 proc newSymbol(self: Context, name: Token, symbolType: Type) =
   self.currentScope.symbolTable[name.lexeme] = Symbol(definitionToken: name, symbolType: symbolType)
@@ -296,6 +296,9 @@ proc visitReturnStatement(ctx: Context, node: ReturnStatement) =
       if node.value.exprType.neq(ctx.expectedReturnType):
         newError(errReturnTypeMismatch, node.token, ctx.expectedReturnType, node.value.exprType)
 
+proc visitCallStatement(ctx: Context, node: CallStatement) =
+  ctx.visit(node.expr)
+
 proc visit(ctx: Context, node: Expression) =
   case node.kind:
   of exprNumber: visitNumberExpression(ctx, NumberExpression(node))
@@ -317,6 +320,7 @@ proc visit(ctx: Context, node: Statement) =
   of stmtBreak: visitBreakStatement(ctx, BreakStatement(node))
   of stmtFunc: visitFuncStatement(ctx, FuncStatement(node))
   of stmtReturn: visitReturnStatement(ctx, ReturnStatement(node))
+  of stmtCall: visitCallStatement(ctx, CallStatement(node))
   else: discard
 
 proc checkSemantics*(node: Statement) =
@@ -327,5 +331,9 @@ proc checkSemantics*(node: Statement) =
       symbolTable: initTable[string, Symbol]()
     ),
     symbolScopeStack: initTable[string, seq[Scope]]()
+  )
+  ctx.newSymbol(
+    Token(lexeme: "debug"),
+    getFuncType(@[int64Type], undefinedType)
   )
   ctx.visit(node)

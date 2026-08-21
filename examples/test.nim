@@ -1,3 +1,4 @@
-import /home/xlebore3o4ka/nimProjects/Onnim/src/std/system
-block `run`:
-  var `x`: ptr int = onnim_add(10)
+import /home/xlebore3o4ka/nimProjects/Onnim/src/std/[system, builtins]
+block `transpiled`:
+  var `x`: int = 10
+  `debug`(`x`)

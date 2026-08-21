@@ -8,7 +8,7 @@ type
     len*: uint = 0
     arena*: ptr UncheckedArray[byte]
 
-proc onnim_add*[T](arena: var OnnimArena, value: T): ptr T =
+proc onnim_addArena*[T](arena: var OnnimArena, value: T): ptr T =
   const align = uint(alignof(T)) - 1
   arena.len = (arena.len + align) and not align
 
@@ -22,12 +22,12 @@ proc onnim_add*[T](arena: var OnnimArena, value: T): ptr T =
   result[] = value
   arena.len = newLen
 
-template onnim_add*[T](value: T): ptr T = onnim_add(onnimCurrentArena, value)
+template onnim_addArena*[T](value: T): ptr T = onnim_addArena(onnimCurrentArena, value)
 
 template onnim_newArena*(size: uint = ONNIM_ARENA_INITIAL_SIZE): OnnimArena =
   OnnimArena(arena: cast[ptr UncheckedArray[byte]](alloc(size)))
 
-template onnim_free*(arena: var OnnimArena) =
+template onnim_killArena*(arena: var OnnimArena) =
   if arena.arena != nil:
     dealloc(arena.arena)
     arena.arena = nil 
