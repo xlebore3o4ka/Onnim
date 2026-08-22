@@ -23,7 +23,6 @@ type
       ptrBase*: Type
       ptrRegion*: Type
     of typeRegion:
-      regionLevel*: Natural
       regionName*: Token
     else: discard
 
@@ -52,7 +51,7 @@ proc eq*(a: Type, b: Type): bool =
     return eq(a.ptrBase, b.ptrBase) and eq(a.ptrRegion, b.ptrRegion)
 
   if a.kind == typeRegion:
-    return a.regionLevel == b.regionLevel and a.regionName == b.regionName
+    return a.regionName == b.regionName
 
   return true
 
@@ -70,10 +69,6 @@ proc eq*(a: TypeKind, b: TypeKind): bool {.inline.} =
 proc neq*(a: Type | TypeKind, b: Type | TypeKind): bool {.inline.} =
   not eq(a, b)
 
-proc getUndefinedType*(): Type {.inline.} = undefinedType
-proc getInt64Type*():     Type {.inline.} = int64Type
-proc getBoolType*():      Type {.inline.} = boolType
-
 proc getFuncType*(argTypes: seq[Type], returnType: Type): Type =
   for funcType in funcTypes:
     if funcType.argTypes == argTypes and eq(funcType.returnType, returnType):
@@ -90,12 +85,12 @@ proc getPtrType*(baseType: Type, region: Type): Type =
   result = Type(kind: typePtr, ptrBase: baseType, ptrRegion: region)
   ptrTypes.add(result)
 
-proc getRegionType*(level: Natural, name: Token): Type =
+proc getRegionType*(name: Token): Type =
   for regionType in regionTypes:
-    if regionType.regionLevel == level and regionType.regionName.lexeme == name.lexeme:
+    if regionType.regionName.lexeme == name.lexeme:
       return regionType
   
-  result = Type(kind: typeRegion, regionLevel: level, regionName: name)
+  result = Type(kind: typeRegion, regionName: name)
   regionTypes.add(result)
 
 proc `$`*(k: TypeKind): string =

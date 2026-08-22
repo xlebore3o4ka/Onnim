@@ -58,7 +58,7 @@ proc makeConstructor(typeName, kindValue, objectTy: NimNode): NimNode =
       ident("exprType"),
       ident("Type"),
       quote do:
-        types.getUndefinedType()
+        types.undefinedType
     )
 
     body.add quote do:
@@ -249,4 +249,9 @@ constructors:
       ## <expr>
       ## "(" = token
       expr*: CallExpression
-    
+
+    RegionStatement* {.onnimnode: stmtRegion.} = ref object of Statement
+      ## region <name> <block>
+      ## region = token
+      name*: Token
+      regionBlock*: BlockStatement

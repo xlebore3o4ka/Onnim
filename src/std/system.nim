@@ -31,9 +31,18 @@ proc onnim_system_getArena*[T](arena: var onnim_system_Arena, index: uint): var 
 template onnim_system_newArena*(size: uint = onnim_system_ARENA_INITIAL_SIZE): onnim_system_Arena =
   onnim_system_Arena(arena: cast[ptr UncheckedArray[byte]](alloc(size)))
 
-template onnim_system_killArena*(arena: var onnim_system_Arena) =
-  if arena.arena != nil:
-    dealloc(arena.arena)
-    arena.arena = nil
+template onnim_system_killArena*(onnim_arena: var onnim_system_Arena) =
+  if onnim_arena.arena != nil:
+    dealloc(onnim_arena.arena)
+    onnim_arena.arena = nil
+
+import macros
+
+macro onnim_system_region*(name: untyped, regionBlock: untyped): untyped =
+  return quote do:
+    block:
+      var `name` = onnim_system_newArena()
+      `regionBlock`
+      onnim_system_killArena(`name`)
 
 {.pop.}

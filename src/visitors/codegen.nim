@@ -1,5 +1,6 @@
 import ../core/[ast, types, tokens]
 import std/[strformat, sequtils, strutils, os]
+from semantics import ident
 
 const apiprefix = "onnim"
 
@@ -26,7 +27,7 @@ proc nimtype(t: Type): string =
     for i, argt in t.argTypes:
       if i != 0: args &= ", "
       args &= fmt"arg{i}: {nimtype(argt)}"
-    if t.returnType.neq getUndefinedType():
+    if t.returnType.neq(typeUndefined):
       return fmt"proc ({args}): {t.returnType}"
     return fmt"proc ({args})"
   of typePtr:
@@ -45,19 +46,19 @@ proc visitBoolExpression(ctx: Context, node: BoolExpression): string =
   return node.token.lexeme
 
 proc visitUnaryExpression(ctx: Context, node: UnaryExpression): string =
-  if node.token.kind == tkAt:
-    return apicall(
-      "addArena", 
-      node.exprType.ptrRegion.regionName.lexeme, ctx.visit(node.value), 
-      module = "system",
-      types = @[nimtype(node.value.exprType)]
-    )
   return node.token.lexeme & ctx.visit(node.value)
 
 proc visitBinaryExpression(ctx: Context, node: BinaryExpression): string =
   var op = node.token.lexeme
   if node.token.kind == tkPercent:
     op = "mod"
+  elif node.token.kind == tkAt:
+    return apicall(
+      "addArena", 
+      ctx.visit(node.left), ctx.visit(node.right), 
+      module = "system",
+      types = @[nimtype(node.right.exprType)]
+    )
   return fmt"{ctx.visit(node.left)} {op} {ctx.visit(node.right)}"
 
 proc visitIdentExpression(ctx: Context, node: IdentExpression): string =
@@ -70,7 +71,7 @@ proc visitCallExpression(ctx: Context, node: CallExpression): string =
 
 proc visitDerefExpression(ctx: Context, node: DerefExpression): string =
   return apicall("getArena", 
-    node.value.exprType.ptrRegion.regionName.lexeme, ctx.visit(node.value), 
+    ident(node.value.exprType.ptrRegion.regionName.lexeme), ctx.visit(node.value), 
     module = "system", 
     types = @[nimtype(node.value.exprType.ptrBase)]
   )
@@ -82,8 +83,10 @@ proc visitDerefExpression(ctx: Context, node: DerefExpression): string =
 proc visitBlockStatement(ctx: Context, node: BlockStatement): string =
   result = "\n"
   ctx.indent += 1
-  for stmt in node.statements:
-    result &= indent(ctx) & ctx.visit(stmt) & "\n"
+  for i, stmt in node.statements:
+    if i != 0:
+      result &= "\n"
+    result &= indent(ctx) & ctx.visit(stmt)
   ctx.indent -= 1
 
 proc visitDeclarationStatement(ctx: Context, node: DeclarationStatement): string =
@@ -114,7 +117,7 @@ proc visitFuncStatement(ctx: Context, node: FuncStatement): string =
     if i != 0: result &= ", "
     result &= fmt"{arg.argToken.lexeme}: {nimtype(arg.argType)}"
   result &= ")"
-  if node.returnType != getUndefinedType():
+  if node.returnType.neq(typeUndefined):
     result &= fmt": {nimtype(node.returnType)}"
   result &= fmt" = {ctx.visit(node.funcBlock)}"
 
@@ -124,7 +127,10 @@ proc visitReturnStatement(ctx: Context, node: ReturnStatement): string =
   result = fmt"return {ctx.visit(node.value)}"
 
 proc visitCallStatement(ctx: Context, node: CallStatement): string =
-  return (if node.expr.exprType.neq getUndefinedType(): "discard " else: "") & ctx.visit(node.expr)
+  return (if node.expr.exprType.neq(typeUndefined): "discard " else: "") & ctx.visit(node.expr)
+
+proc visitRegionStatement(ctx: Context, node: RegionStatement): string =
+  return apicall("region", node.name.lexeme, module="system") & ":" & ctx.visit(node.regionBlock)
 
 proc visit(ctx: Context, node: Expression): string =
   case node.kind:
@@ -149,12 +155,15 @@ proc visit(ctx: Context, node: Statement): string =
   of stmtFunc: return visitFuncStatement(ctx, FuncStatement(node))
   of stmtReturn: return visitReturnStatement(ctx, ReturnStatement(node))
   of stmtCall: return visitCallStatement(ctx, CallStatement(node))
+  of stmtRegion: return visitRegionStatement(ctx, RegionStatement(node))
   else: discard
 
 proc generateCode*(node: Statement): string =
   var ctx = Context()
-  return &"""import {currentSourcePath().absolutePath()}/src/std/[system]
+  result = &"""import {currentSourcePath().absolutePath()}/src/std/[system]
 
-var region = onnim_system_newArena()
+var `ident_region` = onnim_system_newArena()
 
-block `transpiled`:""" & ctx.visit(node)
+block `transpiled`:""" & ctx.visit(node) & "\n"
+  ctx.indent.inc
+  result &= ctx.indent() & "quit(0)"

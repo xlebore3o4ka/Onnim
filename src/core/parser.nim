@@ -36,12 +36,12 @@ proc isType(self: Parser, token: Token): bool =
 
 proc parseType(self: var Parser, token: Token): Type =
   case token.kind:
-  of tkInt64: result = getInt64Type()
-  of tkBool: result = getBoolType()
-  of tkUnder: result = getUndefinedType()
+  of tkInt64: result = int64Type
+  of tkBool: result = boolType
+  of tkUnder: result = undefinedType
   else:
     newError(errType, token, token.mean)
-    result = getUndefinedType()
+    result = undefinedType
 
   while self.peekToken().kind in {tkLParen, tkCaret}:
     let tok = self.nextToken()
@@ -61,8 +61,8 @@ proc parseType(self: var Parser, token: Token): Type =
     elif tok.kind == tkCaret:
       var region = self.nextToken()
       if region.kind notin {tkRegion, tkIdent}:
-        newError(errExpectedSyntax, region, $tkRegion & " | " & $tkIdent, region.lexeme)
-      result = getPtrType(result, getRegionType(0, region))
+        newError(errExpectedSyntax, region, tkRegion.mean & " | " & tkIdent.mean, region.kind.mean)
+      result = getPtrType(result, getRegionType(region))
 
 proc parseExpression(self: var Parser): Expression
 
@@ -80,7 +80,7 @@ proc parsePrimary(self: var Parser): Expression =
   elif token.kind in {tkTrue, tkFalse}:
     return newBoolExpression(token)
 
-  elif token.kind == tkIdent:
+  elif token.kind in {tkIdent, tkRegion}:
     return newIdentExpression(token)
 
   self.newError(errExpression, token, token.mean)
@@ -88,7 +88,7 @@ proc parsePrimary(self: var Parser): Expression =
 
 proc parsePrefix(self: var Parser): Expression =
   let token = self.peekToken()
-  if token.kind in {tkPlus, tkMinus, tkBang, tkAt}:
+  if token.kind in {tkPlus, tkMinus, tkBang}:
     self.skipToken()
     return newUnaryExpression(token, self.parsePrefix())
 
@@ -156,8 +156,16 @@ proc parseOr(self: var Parser): Expression =
     let right = self.parseAnd()
     result = newBinaryExpression(op, result, right)
 
+proc parseAt(self: var Parser): Expression =
+  result = self.parseOr()
+
+  while self.lexer.peekToken().kind == tkAt:
+    let op = self.lexer.nextToken()
+    let right = self.parseOr()
+    result = newBinaryExpression(op, result, right)
+
 proc parseExpression(self: var Parser): Expression =
-  return self.parseOr()
+  return self.parseAt()
 
 proc parseStatement(self: var Parser): Statement
 
@@ -219,7 +227,7 @@ proc parseWhile(self: var Parser): Statement =
 proc parseFunc(self: var Parser): Statement =
   let token = self.nextToken()
 
-  var funcType = getUndefinedType()
+  var funcType = undefinedType
 
   if self.isType(self.peekToken()):
     funcType = self.parseType(self.nextToken())
