@@ -8,8 +8,14 @@ type
     indent = 0
 
 template indent(ctx: Context): string = "  ".repeat(ctx.indent)
-template apicall(name: string, args: varargs[string, `$`], module: string = ""): string = 
-  apiprefix & (if module != "": "_" & module else: "") & "_" & name & "(" & args.join(", ") & ")"
+template apicall(name: string, args: varargs[string, `$`], module: string = "", types: seq[string] = @[]): string = 
+  apiprefix & (
+    if module != "": "_" & module 
+    else: ""
+  ) & "_" & name & (
+    if types.len != 0: "[" & types.join(", ") & "]"
+    else: ""
+  ) & "(" & args.join(", ") & ")"
 
 proc nimtype(t: Type): string =
   case t.kind:
@@ -24,7 +30,7 @@ proc nimtype(t: Type): string =
       return fmt"proc ({args}): {t.returnType}"
     return fmt"proc ({args})"
   of typePtr:
-    return fmt"ptr {nimtype(t.ptrBase)}"
+    return fmt"uint #[ptr {nimtype(t.ptrBase)}]#"
   else: 
     echo "Unhandled type: ", t 
     quit(1)
@@ -40,7 +46,12 @@ proc visitBoolExpression(ctx: Context, node: BoolExpression): string =
 
 proc visitUnaryExpression(ctx: Context, node: UnaryExpression): string =
   if node.token.kind == tkAt:
-    return apicall("addArena", ctx.visit(node.value), module = "system")
+    return apicall(
+      "addArena", 
+      node.exprType.ptrRegion.regionName.lexeme, ctx.visit(node.value), 
+      module = "system",
+      types = @[nimtype(node.value.exprType)]
+    )
   return node.token.lexeme & ctx.visit(node.value)
 
 proc visitBinaryExpression(ctx: Context, node: BinaryExpression): string =
@@ -58,7 +69,11 @@ proc visitCallExpression(ctx: Context, node: CallExpression): string =
   return fmt"{fn}({args})"
 
 proc visitDerefExpression(ctx: Context, node: DerefExpression): string =
-  return ctx.visit(node.value) & "[]"
+  return apicall("getArena", 
+    node.value.exprType.ptrRegion.regionName.lexeme, ctx.visit(node.value), 
+    module = "system", 
+    types = @[nimtype(node.value.exprType.ptrBase)]
+  )
 
 
 # STATEMENTS
@@ -138,4 +153,8 @@ proc visit(ctx: Context, node: Statement): string =
 
 proc generateCode*(node: Statement): string =
   var ctx = Context()
-  return &"import {currentSourcePath().absolutePath()}/src/std/[system]\nblock `transpiled`:" & ctx.visit(node)
+  return &"""import {currentSourcePath().absolutePath()}/src/std/[system]
+
+var region = onnim_system_newArena()
+
+block `transpiled`:""" & ctx.visit(node)

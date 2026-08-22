@@ -43,7 +43,7 @@ proc parseType(self: var Parser, token: Token): Type =
     newError(errType, token, token.mean)
     result = getUndefinedType()
 
-  while self.peekToken().kind in {tkLParen, tkStar}:
+  while self.peekToken().kind in {tkLParen, tkCaret}:
     let tok = self.nextToken()
 
     if tok.kind == tkLParen:
@@ -58,8 +58,11 @@ proc parseType(self: var Parser, token: Token): Type =
       discard self.expectToken(tkRParen)
       result = getFuncType(argTypes, result)
 
-    elif tok.kind == tkStar:
-      result = getPtrType(result)
+    elif tok.kind == tkCaret:
+      var region = self.nextToken()
+      if region.kind notin {tkRegion, tkIdent}:
+        newError(errExpectedSyntax, region, $tkRegion & " | " & $tkIdent, region.lexeme)
+      result = getPtrType(result, getRegionType(0, region))
 
 proc parseExpression(self: var Parser): Expression
 
@@ -248,6 +251,13 @@ proc parseReturn(self: var Parser): Statement =
 
   return newReturnStatement(token, expression)
 
+proc parseRegion(self: var Parser): Statement =
+  let token = self.nextToken()
+  let name = self.expectToken(tkIdent)
+  let regionBlock = self.parseBlock(tkEnd)
+
+  return newRegionStatement(token, name, regionBlock)
+
 proc parseStatement(self: var Parser): Statement =
   let token = self.lexer.peekToken()
 
@@ -271,6 +281,9 @@ proc parseStatement(self: var Parser): Statement =
 
   elif token.kind == tkReturn:
     return self.parseReturn()
+
+  elif token.kind == tkRegion:
+    return self.parseRegion()
 
   elif self.isExpression(token):
     let expr = self.parseExpression()

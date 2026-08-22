@@ -143,6 +143,7 @@ constructors:
 
       stmtInvalid, stmtBlock, stmtDeclaration, stmtAssignment, stmtBranching
       stmtWhile, stmtContinue, stmtBreak, stmtFunc, stmtReturn, stmtCall
+      stmtRegion
 
     Expression* = ref object of RootObj
       kind*: NodeKind
@@ -248,3 +249,4 @@ constructors:
       ## <expr>
       ## "(" = token
       expr*: CallExpression
+    

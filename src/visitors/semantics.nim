@@ -21,8 +21,9 @@ type
     funcDepth: Natural
 
     expectedReturnType: Type
+    expectedRegion: Type
 
-template ident(name: string): string = "`" & (if not name.endswith("_"): name else: name & "X") & "`"
+template ident(name: string): string = "`ident_" & (if not name.endswith("_"): name else: name & "X") & "`"
 
 proc newSymbol(self: Context, name: Token, symbolType: Type) =
   self.currentScope.symbolTable[name.lexeme] = Symbol(definitionToken: name, symbolType: symbolType)
@@ -72,7 +73,7 @@ proc visitUnaryExpression(ctx: Context, node: UnaryExpression) =
   let typ = node.value.exprType
 
   if op == tkAt:
-    node.setType(ctx, getPtrType(node.value.exprType))
+    node.setType(ctx, getPtrType(node.value.exprType, ctx.expectedRegion))
 
   elif typ.isInteger() and op in {tkPlus, tkMinus}:
     node.setType(ctx, node.value.exprType)
@@ -163,9 +164,22 @@ proc visitBlockStatement(ctx: Context, node: BlockStatement) =
     ctx.visit(stmt)
 
 proc visitDeclarationStatement(ctx: Context, node: DeclarationStatement) =
-  ctx.visit(node.value)
-
   block semantics:
+    if node.valueType.eq(typePtr):
+      let regionName = node.valueType.ptrRegion.regionName
+      if (not ctx.symbolExists(regionName.lexeme)):
+        newError(errUndeclaredSymbol, regionName, regionName.lexeme)
+        break semantics
+      else:
+        let temp = ctx.expectedRegion
+        ctx.expectedRegion = node.valueType.ptrRegion
+
+        ctx.visit(node.value)
+
+        ctx.expectedRegion = temp
+    else:
+      ctx.visit(node.value)
+
     if node.value.exprType.neq node.valueType:
       newError(errDeclarationTypeMismatch, node.token, node.valueType, node.name.lexeme, node.value.exprType)
       break semantics
@@ -340,12 +354,15 @@ proc visit(ctx: Context, node: Statement) =
   else: discard
 
 proc checkSemantics*(node: Statement) =
+  let regionToken = Token(lexeme: "region")
   var ctx = Context(
     currentScope: Scope(
       depth: 0,
       isGlobal: true,
       symbolTable: initTable[string, Symbol]()
     ),
-    symbolScopeStack: initTable[string, seq[Scope]]()
+    symbolScopeStack: initTable[string, seq[Scope]](),
+    expectedRegion: getRegionType(0, regionToken)
   )
+  ctx.newSymbol(regionToken, getRegionType(0, regionToken))
   ctx.visit(node)

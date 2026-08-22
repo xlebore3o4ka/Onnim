@@ -8,7 +8,7 @@ type
     len*: uint = 0
     arena*: ptr UncheckedArray[byte]
 
-proc onnim_system_addArena*[T](arena: var onnim_system_Arena, value: T): ptr T =
+proc onnim_system_addArena*[T](arena: var onnim_system_Arena, value: T): uint =
   const align = uint(alignof(T)) - 1
   arena.len = (arena.len + align) and not align
 
@@ -18,11 +18,15 @@ proc onnim_system_addArena*[T](arena: var onnim_system_Arena, value: T): ptr T =
     arena.arena = cast[ptr UncheckedArray[byte]](realloc(arena.arena, newSize))
     arena.size = newSize
   
-  result = cast[ptr T](addr arena.arena[arena.len])
-  result[] = value
+  let idx = arena.len
+  cast[ptr T](addr arena.arena[idx])[] = value
   arena.len = newLen
+  return idx
 
-template onnim_system_addArena*[T](value: T): ptr T = onnim_system_addArena(onnim_system_CurrentArena, value)
+proc onnim_system_getArena*[T](arena: var onnim_system_Arena, index: uint): var T =
+  if index + uint(sizeof(T)) <= arena.len:
+    return cast[ptr T](addr arena.arena[index])[]
+  raise newException(IndexDefect, "Index out of bounds")
 
 template onnim_system_newArena*(size: uint = onnim_system_ARENA_INITIAL_SIZE): onnim_system_Arena =
   onnim_system_Arena(arena: cast[ptr UncheckedArray[byte]](alloc(size)))
@@ -30,8 +34,6 @@ template onnim_system_newArena*(size: uint = onnim_system_ARENA_INITIAL_SIZE): o
 template onnim_system_killArena*(arena: var onnim_system_Arena) =
   if arena.arena != nil:
     dealloc(arena.arena)
-    arena.arena = nil 
-
-var onnim_system_CurrentArena*: onnim_system_Arena = onnim_system_newArena()
+    arena.arena = nil
 
 {.pop.}

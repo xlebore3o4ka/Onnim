@@ -17,6 +17,7 @@ type
     tkIf, tkElif, tkElse, tkDo, tkEnd
     tkWhile, tkContinue, tkBreak
     tkFunc, tkReturn
+    tkRegion
 
     tkEOF
     tkInvalid
@@ -95,6 +96,8 @@ const keywordTable* = {
 
   "func": tkFunc,
   "return": tkReturn,
+
+  "region": tkRegion
   
 }.toTable
 
@@ -145,12 +148,14 @@ proc mean*(kind: TokenKind): string =
   of tkDo:            return "keyword 'do'"
   of tkEnd:           return "keyword 'end'"
 
-  of tkWhile:         return "keyowrd 'while'"
-  of tkContinue:      return "keyowrd 'continue'"
-  of tkBreak:         return "keyowrd 'break'"
+  of tkWhile:         return "keyword 'while'"
+  of tkContinue:      return "keyword 'continue'"
+  of tkBreak:         return "keyword 'break'"
 
-  of tkFunc:          return "keyowrd 'func'"
-  of tkReturn:        return "keyowrd 'return'"
+  of tkFunc:          return "keyword 'func'"
+  of tkReturn:        return "keyword 'return'"
+
+  of tkRegion:        return "keyword 'region'"
   
   of tkInvalid:       return "invalid token"
   of tkEOF:           return "end of file"
