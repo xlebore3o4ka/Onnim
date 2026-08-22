@@ -72,7 +72,7 @@ proc visitUnaryExpression(ctx: Context, node: UnaryExpression) =
   let typ = node.value.exprType
 
   if op == tkAt:
-    node.setType(ctx, getObjType(node.value.exprType))
+    node.setType(ctx, getPtrType(node.value.exprType))
 
   elif typ.isInteger() and op in {tkPlus, tkMinus}:
     node.setType(ctx, node.value.exprType)
@@ -145,6 +145,15 @@ proc visitCallExpression(ctx: Context, node: CallExpression) =
 
     node.setType(ctx, valueType.returnType)
 
+proc visitDerefExpression(ctx: Context, node: DerefExpression) =
+  ctx.visit(node.value)
+
+  if node.value.exprType.neq typePtr:
+    newError(errTypeMismatch, node.value.token, typePtr, node.value.exprType)
+
+  else:
+    node.setType(ctx, node.value.exprType.ptrBase)
+
 
 # STATEMENTS
 
@@ -174,8 +183,14 @@ proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement) =
   ctx.visit(node.left)
   ctx.visit(node.right)
 
-  if node.left.exprType.neq node.right.exprType:
-    newError(errTypeMismatch, node.token, node.left.exprType, node.right.exprType)
+  case node.left.kind:
+  of exprIdent, exprDeref:
+    if node.left.exprType.neq node.right.exprType:
+      newError(errTypeMismatch, node.token, node.left.exprType, node.right.exprType)
+
+  else:
+    echo "Unhandled assignment"
+    quit(1)
 
 proc visitBranchingStatement(ctx: Context, node: BranchingStatement) =
   ctx.visit(node.condition)
@@ -307,6 +322,7 @@ proc visit(ctx: Context, node: Expression) =
   of exprBinary: visitBinaryExpression(ctx, BinaryExpression(node))
   of exprIdent: visitIdentExpression(ctx, IdentExpression(node))
   of exprCall: visitCallExpression(ctx, CallExpression(node))
+  of exprDeref: visitDerefExpression(ctx, DerefExpression(node))
   else: discard
 
 proc visit(ctx: Context, node: Statement) =
@@ -331,9 +347,5 @@ proc checkSemantics*(node: Statement) =
       symbolTable: initTable[string, Symbol]()
     ),
     symbolScopeStack: initTable[string, seq[Scope]]()
-  )
-  ctx.newSymbol(
-    Token(lexeme: "debug"),
-    getFuncType(@[int64Type], undefinedType)
   )
   ctx.visit(node)

@@ -1,7 +1,7 @@
 import tokens, types
 import std/macros
 
-template kovynode*(kind: untyped) {.pragma.}
+template onnimnode*(kind: untyped) {.pragma.}
 
 
 proc unstar(n: NimNode): NimNode =
@@ -111,13 +111,13 @@ macro constructors*(body: untyped): untyped =
       if pragmas.kind == nnkPragma:
         for p in pragmas:
           if p.kind == nnkExprColonExpr and
-             eqIdent(p[0], "kovynode"):
+             eqIdent(p[0], "onnimnode"):
             kindValue = p[1]
             break
 
       if kindValue.isNil:
         error(
-          "Missing {.kovynode: ... .}",
+          "Missing {.onnimnode: ... .}",
           typeDef
         )
 
@@ -139,7 +139,7 @@ constructors:
   type
     NodeKind* = enum
       exprInvalid, exprNumber, exprUnary, exprBinary, exprBool, exprIdent,
-      exprCall
+      exprCall, exprDeref
 
       stmtInvalid, stmtBlock, stmtDeclaration, stmtAssignment, stmtBranching
       stmtWhile, stmtContinue, stmtBreak, stmtFunc, stmtReturn, stmtCall
@@ -149,62 +149,67 @@ constructors:
       token*: Token
       exprType*: Type
 
-    InvalidExpression* {.kovynode: exprInvalid.} = ref object of Expression
+    InvalidExpression* {.onnimnode: exprInvalid.} = ref object of Expression
 
-    NumberExpression* {.kovynode: exprNumber.} = ref object of Expression
+    NumberExpression* {.onnimnode: exprNumber.} = ref object of Expression
       ## <number>
       ## number = token
 
-    UnaryExpression* {.kovynode: exprUnary.} = ref object of Expression
+    UnaryExpression* {.onnimnode: exprUnary.} = ref object of Expression
       ## <op> <value>
       ## op = token
       value*: Expression
 
-    BinaryExpression* {.kovynode: exprBinary.} = ref object of Expression
+    BinaryExpression* {.onnimnode: exprBinary.} = ref object of Expression
       ## <left> <op> <right>
       ## op = token
       left*: Expression
       right*: Expression
 
-    BoolExpression* {.kovynode: exprBool.} = ref object of Expression
+    BoolExpression* {.onnimnode: exprBool.} = ref object of Expression
       ## <bool>
       ## bool = token
 
-    IdentExpression* {.kovynode: exprIdent.} = ref object of Expression
+    IdentExpression* {.onnimnode: exprIdent.} = ref object of Expression
       ## <ident>
       ## ident = token
     
-    CallExpression* {.kovynode: exprCall.} = ref object of Expression
+    CallExpression* {.onnimnode: exprCall.} = ref object of Expression
       ## <value> ( [<args>]* )
       ## "(" = token
       value*: Expression
       args*: seq[Expression]
 
+    DerefExpression* {.onnimnode: exprDeref.} = ref object of Expression
+      ## <value> ^
+      ## "^" = token
+      value*: Expression
+
     Statement* = ref object of RootObj
       kind*: NodeKind
       token*: Token
 
-    InvalidStatement* {.kovynode: stmtInvalid.} = ref object of Statement
+    InvalidStatement* {.onnimnode: stmtInvalid.} = ref object of Statement
 
-    BlockStatement* {.kovynode: stmtBlock.} = ref object of Statement
+    BlockStatement* {.onnimnode: stmtBlock.} = ref object of Statement
       ## do [<stmt>]* <endToken>
       ## endToken = token
       statements*: seq[Statement]
 
-    DeclarationStatement* {.kovynode: stmtDeclaration.} = ref object of Statement
+    DeclarationStatement* {.onnimnode: stmtDeclaration.} = ref object of Statement
       ## <valueType> <name> "=" <value>
       ## "=" = token
       valueType*: Type
       name*: Token
       value*: Expression
 
-    AssignmentStatement* {.kovynode: stmtAssignment.} = ref object of Statement
+    AssignmentStatement* {.onnimnode: stmtAssignment.} = ref object of Statement
       ## <left> = <right>
       ## "=" = token
       left*: Expression
       right*: Expression
 
-    BranchingStatement* {.kovynode: stmtBranching.} = ref object of Statement
+    BranchingStatement* {.onnimnode: stmtBranching.} = ref object of Statement
       ## if <cond> <block> [elif <cond> <block>]* [else <block>]
       ## if = token
       condition*: Expression
@@ -212,21 +217,21 @@ constructors:
       elifBranches*: seq[tuple[cond: Expression, elifBlock: BlockStatement]]
       elseBlock*: BlockStatement
 
-    WhileStatement* {.kovynode: stmtWhile.} = ref object of Statement
+    WhileStatement* {.onnimnode: stmtWhile.} = ref object of Statement
       ## while <cond> <block>
       ## while = token
       condition*: Expression
       whileBlock*: BlockStatement
 
-    ContinueStatement* {.kovynode: stmtContinue.} = ref object of Statement
+    ContinueStatement* {.onnimnode: stmtContinue.} = ref object of Statement
       ## continue
       ## continue = token
 
-    BreakStatement* {.kovynode: stmtBreak.} = ref object of Statement
+    BreakStatement* {.onnimnode: stmtBreak.} = ref object of Statement
       ## break
       ## break = token
 
-    FuncStatement* {.kovynode: stmtFunc.} = ref object of Statement
+    FuncStatement* {.onnimnode: stmtFunc.} = ref object of Statement
       ## func [type] <name> ( [<args>]* ) <block>
       ## func = token
       returnType*: Type
@@ -234,12 +239,12 @@ constructors:
       args*: seq[FuncArg]
       funcBlock*: BlockStatement
 
-    ReturnStatement* {.kovynode: stmtReturn.} = ref object of Statement
+    ReturnStatement* {.onnimnode: stmtReturn.} = ref object of Statement
       ## return [value]
       ## return = token
       value*: Expression
 
-    CallStatement* {.kovynode: stmtCall.} = ref object of Statement
+    CallStatement* {.onnimnode: stmtCall.} = ref object of Statement
       ## <expr>
-      ## ( = token
+      ## "(" = token
       expr*: CallExpression

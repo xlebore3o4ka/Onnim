@@ -59,7 +59,7 @@ proc parseType(self: var Parser, token: Token): Type =
       result = getFuncType(argTypes, result)
 
     elif tok.kind == tkStar:
-      result = getObjType(result)
+      result = getPtrType(result)
 
 proc parseExpression(self: var Parser): Expression
 
@@ -94,7 +94,7 @@ proc parsePrefix(self: var Parser): Expression =
 proc parsePostfix(self: var Parser): Expression =
   result = self.parsePrefix()
 
-  while (let token = self.peekToken(); token.kind in {tkLParen}):
+  while (let token = self.peekToken(); token.kind in {tkLParen, tkCaret}):
     if token.kind == tkLParen:
       self.skipToken()
 
@@ -108,6 +108,10 @@ proc parsePostfix(self: var Parser): Expression =
 
       discard self.expectToken(tkRParen)
       result = newCallExpression(token, result, args)
+
+    elif token.kind == tkCaret:
+      self.skipToken()
+      result = newDerefExpression(token, result)
 
 proc parseMulDiv(self: var Parser): Expression =
   result = self.parsePostfix()
@@ -271,7 +275,7 @@ proc parseStatement(self: var Parser): Statement =
   elif self.isExpression(token):
     let expr = self.parseExpression()
 
-    if expr.kind in {exprIdent} and self.peekToken().kind == tkEquals:
+    if expr.kind in {exprIdent, exprDeref} and self.peekToken().kind == tkEquals:
       return newAssignmentStatement(self.nextToken(), expr, self.parseExpression())
 
     elif expr.kind == exprCall:

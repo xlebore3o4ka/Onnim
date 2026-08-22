@@ -8,8 +8,8 @@ type
     indent = 0
 
 template indent(ctx: Context): string = "  ".repeat(ctx.indent)
-template apicall(name: string, args: varargs[string, `$`]): string = 
-  apiprefix & "_" & name & "(" & args.join(", ") & ")"
+template apicall(name: string, args: varargs[string, `$`], module: string = ""): string = 
+  apiprefix & (if module != "": "_" & module else: "") & "_" & name & "(" & args.join(", ") & ")"
 
 proc nimtype(t: Type): string =
   case t.kind:
@@ -23,8 +23,8 @@ proc nimtype(t: Type): string =
     if t.returnType.neq getUndefinedType():
       return fmt"proc ({args}): {t.returnType}"
     return fmt"proc ({args})"
-  of typeObj:
-    return fmt"ptr {nimtype(t.objBase)}"
+  of typePtr:
+    return fmt"ptr {nimtype(t.ptrBase)}"
   else: 
     echo "Unhandled type: ", t 
     quit(1)
@@ -40,7 +40,7 @@ proc visitBoolExpression(ctx: Context, node: BoolExpression): string =
 
 proc visitUnaryExpression(ctx: Context, node: UnaryExpression): string =
   if node.token.kind == tkAt:
-    return apicall("addArena", ctx.visit(node.value))
+    return apicall("addArena", ctx.visit(node.value), module = "system")
   return node.token.lexeme & ctx.visit(node.value)
 
 proc visitBinaryExpression(ctx: Context, node: BinaryExpression): string =
@@ -56,6 +56,13 @@ proc visitCallExpression(ctx: Context, node: CallExpression): string =
   let fn = ctx.visit(node.value)
   let args = node.args.mapIt( ctx.visit(it) ).join(", ")
   return fmt"{fn}({args})"
+
+proc visitDerefExpression(ctx: Context, node: DerefExpression): string =
+  return ctx.visit(node.value) & "[]"
+
+
+# STATEMENTS
+
 
 proc visitBlockStatement(ctx: Context, node: BlockStatement): string =
   result = "\n"
@@ -112,6 +119,7 @@ proc visit(ctx: Context, node: Expression): string =
   of exprBinary: return visitBinaryExpression(ctx, BinaryExpression(node))
   of exprIdent: return visitIdentExpression(ctx, IdentExpression(node))
   of exprCall: return visitCallExpression(ctx, CallExpression(node))
+  of exprDeref: return visitDerefExpression(ctx, DerefExpression(node))
   else: discard
 
 proc visit(ctx: Context, node: Statement): string =
@@ -130,4 +138,4 @@ proc visit(ctx: Context, node: Statement): string =
 
 proc generateCode*(node: Statement): string =
   var ctx = Context()
-  return &"import {currentSourcePath().absolutePath()}/src/std/[system, builtins]\nblock `transpiled`:" & ctx.visit(node)
+  return &"import {currentSourcePath().absolutePath()}/src/std/[system]\nblock `transpiled`:" & ctx.visit(node)

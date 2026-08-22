@@ -1,4 +1,5 @@
-import /home/xlebore3o4ka/nimProjects/Onnim/src/std/[system, builtins]
+import /home/xlebore3o4ka/nimProjects/Onnim/src/std/[system]
 block `transpiled`:
-  var `x`: int = 10
-  `debug`(`x`)
+  var `x`: ptr int = onnim_system_addArena(10)
+  var `y`: int = `x`[]
+  `x`[] = 5
