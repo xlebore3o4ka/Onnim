@@ -1,7 +1,3 @@
-region a do
-  region b do
-    int^a x = a @ 1
-  end
-end
-
-int y = 10
+int^region x = region @ 10
+int^region y = region @ 10
+int a = (x + 1000000)^

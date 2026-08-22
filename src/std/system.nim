@@ -23,7 +23,7 @@ proc onnim_system_addArena*[T](arena: var onnim_system_Arena, value: T): uint =
   arena.len = newLen
   return idx
 
-proc onnim_system_getArena*[T](arena: var onnim_system_Arena, index: uint): var T =
+proc onnim_system_getArena*[T](arena: var onnim_system_Arena, index: uint): var T {.inline.} =
   if index + uint(sizeof(T)) <= arena.len:
     return cast[ptr T](addr arena.arena[index])[]
   raise newException(IndexDefect, "Index out of bounds")
