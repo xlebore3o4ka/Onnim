@@ -100,9 +100,9 @@ proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement): string =
 proc visitBranchingStatement(ctx: Context, node: BranchingStatement): string =
   result = fmt"if {ctx.visit(node.condition)}:{ctx.visit(node.ifBlock)}"
   for (cond, elifBlock) in node.elifBranches:
-    result &= indent(ctx) & fmt"elif {ctx.visit(cond)}:{ctx.visit(elifBlock)}"
+    result &= "\n" & indent(ctx) & fmt"elif {ctx.visit(cond)}:{ctx.visit(elifBlock)}"
   if node.elseBlock != nil:
-    result &= indent(ctx) & fmt"else:{ctx.visit(node.elseBlock)}"
+    result &= "\n" & indent(ctx) & fmt"else:{ctx.visit(node.elseBlock)}"
 
 proc visitWhileStatement(ctx: Context, node: WhileStatement): string =
   result = fmt"while {ctx.visit(node.condition)}:{ctx.visit(node.whileBlock)}"
@@ -165,7 +165,7 @@ proc generateCode*(node: Statement): string =
   var ctx = Context()
   result = &"""import {currentSourcePath().absolutePath()}/src/std/[system]
 
-var `ident_region` = onnim_system_newArena()
+var `SYMregion` = onnim_system_newArena()
 
 block `transpiled`:""" & ctx.visit(node) & "\n"
   ctx.indent.inc

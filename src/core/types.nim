@@ -118,7 +118,7 @@ proc `$`*(k: TypeKind): string =
 
   of typeBool:      "bool"
   of typeFunc:      "T(T args, ...)"
-  of typePtr:       "T*"
+  of typePtr:       "T^R"
 
   of typeRegion:    "region"
 

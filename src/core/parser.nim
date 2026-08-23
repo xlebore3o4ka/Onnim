@@ -1,4 +1,5 @@
 import lexer, tokens, errors, ast, types
+import std/[strutils, sequtils]
 
 type Parser* = object
   file: string
@@ -25,6 +26,14 @@ proc expectToken(self: var Parser, expected: TokenKind): Token =
   let token = self.nextToken()
   if token.kind != expected:
     self.newError(errExpectedSyntax, token, expected.mean, token.mean)
+    return token.copy(kind = tkInvalid)
+  return token
+
+proc expectToken(self: var Parser, expected: varargs[TokenKind]): Token =
+  let token = self.nextToken()
+  if token.kind notin expected:
+    let expectedStr = (if expected.len > 1: "one of " else: "") & expected.mapIt(it.mean).join(", ")
+    self.newError(errExpectedSyntax, token, expectedStr, token.mean)
     return token.copy(kind = tkInvalid)
   return token
 
@@ -70,7 +79,7 @@ proc parseType(self: var Parser, token: Token): Type =
     elif tok.kind == tkCaret:
       var region = self.nextToken()
       if region.kind notin {tkRegion, tkIdent}:
-        newError(errExpectedSyntax, region, tkRegion.mean & " | " & tkIdent.mean, region.kind.mean)
+        newError(errExpectedSyntax, region, "one of " & tkRegion.mean & ", " & tkIdent.mean, region.kind.mean)
       result = getPtrType(result, getRegionType(region))
 
 proc parseExpression(self: var Parser): Expression
@@ -208,7 +217,7 @@ proc parseBlock(self: var Parser, endKinds: varargs[TokenKind], consume: bool = 
     stmts.add(self.parseStatement())
   
   let endToken = if consume:
-    self.nextToken()
+    self.expectToken(endKinds)
   else:
     self.peekToken()
   

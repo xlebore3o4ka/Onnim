@@ -5,12 +5,13 @@ import visitors/[semantics, codegen]
 proc main() =
   var
     filename: string
+    shorterrors: bool = false
 
   for kind, key, val in getopt():
     case kind
     of cmdLongOption, cmdShortOption:
       case key
-      # of "release", "r": release = true
+      of "shorterrors", "s": shorterrors = true
       else: discard
     of cmdArgument:
       if filename == "": filename = key
@@ -50,7 +51,7 @@ proc main() =
 
   if errors.errors.len != 0:
     for e in errors.errors:
-      echo e.kind, ' ', e.message, ' ', e.args
+      stderr.writeLine(e.format(shorterrors))
 
 when isMainModule:
   main()

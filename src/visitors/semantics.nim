@@ -1,5 +1,5 @@
 import ../core/[ast, types, tokens, errors]
-import std/[tables, sequtils, strutils]
+import std/[tables, sequtils, strutils, options]
 
 type
   Symbol = object
@@ -86,14 +86,20 @@ proc visitUnaryExpression(ctx: Context, node: UnaryExpression) =
   else:
     newError(errUnaryTypeMismatch, node.token, node.token.lexeme, typ)
 
-proc isMutableExpression(ctx: Context, node: Expression): bool =
+proc isMutableExpression(ctx: Context, node: Expression): Option[bool] =
   case node.kind:
   of exprIdent:
-    return ctx.getSymbol(unident(node.token.lexeme)).mutable and not IdentExpression(node).requireImmutable
+    let name = unident(node.token.lexeme)
+    if not ctx.symbolExists(name): 
+      return none(bool)
+    let sym = ctx.getSymbol(name)
+    return some(sym.mutable and not IdentExpression(node).requireImmutable)
+
   of exprDeref:
-    return true
+    return some(true)
+
   else:
-    return false
+    return some(false)
 
 proc visitBinaryExpression(ctx: Context, node: BinaryExpression) =
   ctx.visit(node.left)
@@ -120,7 +126,8 @@ proc visitBinaryExpression(ctx: Context, node: BinaryExpression) =
       elif typ.eq(boolType) and op in {tkAnd, tkOr, tkEqualsEquals, tkBangEquals}: 
         break opSemantics
       elif typ.eq(typeRegion) and op == tkAt: 
-        if not ctx.isMutableExpression(node.left):
+        let isMutable = ctx.isMutableExpression(node.left)
+        if isMutable.isSome and not isMutable.get():
           newError(errExpectedMutable, node.left.token)
           break typeSemantics
         typ = getPtrType(node.right.exprType, typ)
@@ -139,15 +146,19 @@ proc visitIdentExpression(ctx: Context, node: IdentExpression) =
 
   else:
     node.setType(ctx, ctx.getSymbol(name).symbolType)
-    node.token.lexeme = ident(node.token.lexeme)
+    
+  node.token.lexeme = ident(node.token.lexeme)
 
 proc toArgTypes(ctx: Context, args: seq[Expression]): seq[ArgType] =
   result = newSeq[ArgType](args.len)
   for i, arg in args:
+    var isMutable = ctx.isMutableExpression(arg)
+    if not isMutable.isSome:
+      isMutable = some(false)
     result[i] = ArgType(
       name: "",
       argType: arg.exprType,
-      mutable: ctx.isMutableExpression(arg)
+      mutable: isMutable.get()
     )
 
 proc visitCallExpression(ctx: Context, node: CallExpression) =
@@ -177,7 +188,7 @@ proc visitCallExpression(ctx: Context, node: CallExpression) =
       
       newError(
         errNoMatchesCallForm, node.token,
-        funcName, "T" & $givenArgTypes, expectedArgTypes.mapIt($it).join("\n")
+        funcName, "T" & $givenArgTypes, expectedArgTypes.mapIt("- " & $it).join("\n")
       )
       break semantics
 
@@ -220,9 +231,13 @@ proc visitDeclarationStatement(ctx: Context, node: DeclarationStatement) =
 proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement) =
   ctx.visit(node.left)
   ctx.visit(node.right)
-
+  
   block semantics:
-    if not ctx.isMutableExpression(node.left):
+    if node.left.exprType.eq(typeUndefined):
+      break semantics
+
+    var isMutable = ctx.isMutableExpression(node.left)
+    if isMutable.isSome and not isMutable.get():
       newError(errExpectedMutable, node.left.token)
       break semantics
 

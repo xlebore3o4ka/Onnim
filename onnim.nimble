@@ -17,7 +17,7 @@ task myRun, "Run with debug flags":
 
 task allFiles, "Save all files content to file all_files.txt":
   let ignoredPathes = @["./bin/*", "./.git/*", "./examples/*"]
-  let ignoredNames  = @["all_files.txt", "LICENSE"]
+  let ignoredNames  = @["all_files.txt", "gitchanges.txt", "LICENSE"]
   
   var pathFilters = ""
   for p in ignoredPathes:
