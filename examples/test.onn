@@ -1,3 +1,0 @@
-int^region x = region @ 10
-int^region y = region @ 10
-int a = (x + 1000000)^

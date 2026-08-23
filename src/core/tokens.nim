@@ -7,7 +7,7 @@ type
 
     tkPlus, tkMinus, tkStar, tkSlash, tkPercent
     tkGT, tkLT, tkGTE, tkLTE, tkEqualsEquals, tkBangEquals
-    tkEquals, tkBang, tkComma, tkAt, tkCaret
+    tkEquals, tkBang, tkComma, tkAt, tkCaret, tkDollar
 
     tkLParen, tkRParen
 
@@ -55,6 +55,7 @@ const operatorTable* = {
   ",": tkComma,
   "@": tkAt,
   "^": tkCaret,
+  "$": tkDollar,
 
   "(": tkLParen,
   ")": tkRParen
@@ -128,6 +129,7 @@ proc mean*(kind: TokenKind): string =
   of tkComma:         return "comma operator ','"
   of tkAt:            return "at operator '@'"
   of tkCaret:         return "caret operator '^'"
+  of tkDollar:        return "dollar operator '$'"
   
   of tkLParen:        return "left parenthesis '('"
   of tkRParen:        return "right parenthesis ')'"

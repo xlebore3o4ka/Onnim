@@ -5,6 +5,7 @@ type
   Symbol = object
     definitionToken: Token
     symbolType: Type
+    mutable: bool = true
 
   Scope = ref object
     depth: Natural
@@ -23,10 +24,11 @@ type
     expectedReturnType: Type
     expectedRegion: Type
 
-template ident*(name: string): string = "`ident_" & (if not name.endswith("_"): name else: name & "X") & "`"
+template ident*(name: string): string = "`SYM" & name.replace("_", "_U") & "`"
+template unident*(sym: string): string = sym.strip(chars = {'`'})[3..^1].replace("_U", "_")
 
-proc newSymbol(self: Context, name: Token, symbolType: Type) =
-  self.currentScope.symbolTable[name.lexeme] = Symbol(definitionToken: name, symbolType: symbolType)
+proc newSymbol(self: Context, name: Token, symbolType: Type, mutable: bool) =
+  self.currentScope.symbolTable[name.lexeme] = Symbol(definitionToken: name, symbolType: symbolType, mutable: mutable)
   self.symbolScopeStack.mgetOrPut(name.lexeme, @[]).add(self.currentScope)
 
 proc pushScope(self: Context) =
@@ -84,16 +86,24 @@ proc visitUnaryExpression(ctx: Context, node: UnaryExpression) =
   else:
     newError(errUnaryTypeMismatch, node.token, node.token.lexeme, typ)
 
+proc isMutableExpression(ctx: Context, node: Expression): bool =
+  case node.kind:
+  of exprIdent:
+    return ctx.getSymbol(unident(node.token.lexeme)).mutable and not IdentExpression(node).requireImmutable
+  of exprDeref:
+    return true
+  else:
+    return false
+
 proc visitBinaryExpression(ctx: Context, node: BinaryExpression) =
   ctx.visit(node.left)
   ctx.visit(node.right)
 
   block typeSemantics:
-    if
-      not (node.left.exprType.isArithmetizable() and node.right.exprType.isArithmetizable()) and
-      not (node.left.exprType.isСomparable() and node.right.exprType.isСomparable()) and
-      node.left.exprType.neq(typeRegion) and
-      node.left.exprType.neq(node.right.exprType):
+    if not (node.left.exprType.isArithmetizable() and node.right.exprType.isArithmetizable()) and
+       not (node.left.exprType.isСomparable()     and node.right.exprType.isСomparable())     and
+            node.left.exprType.neq(typeRegion)    and
+            node.left.exprType.neq(node.right.exprType):
 
       newError(errBinaryTypeMismatch, node.token, node.token.lexeme, node.left.exprType, node.right.exprType)
       break typeSemantics
@@ -110,6 +120,9 @@ proc visitBinaryExpression(ctx: Context, node: BinaryExpression) =
       elif typ.eq(boolType) and op in {tkAnd, tkOr, tkEqualsEquals, tkBangEquals}: 
         break opSemantics
       elif typ.eq(typeRegion) and op == tkAt: 
+        if not ctx.isMutableExpression(node.left):
+          newError(errExpectedMutable, node.left.token)
+          break typeSemantics
         typ = getPtrType(node.right.exprType, typ)
         break opSemantics
 
@@ -128,6 +141,15 @@ proc visitIdentExpression(ctx: Context, node: IdentExpression) =
     node.setType(ctx, ctx.getSymbol(name).symbolType)
     node.token.lexeme = ident(node.token.lexeme)
 
+proc toArgTypes(ctx: Context, args: seq[Expression]): seq[ArgType] =
+  result = newSeq[ArgType](args.len)
+  for i, arg in args:
+    result[i] = ArgType(
+      name: "",
+      argType: arg.exprType,
+      mutable: ctx.isMutableExpression(arg)
+    )
+
 proc visitCallExpression(ctx: Context, node: CallExpression) =
   ctx.visit(node.value)
 
@@ -138,19 +160,26 @@ proc visitCallExpression(ctx: Context, node: CallExpression) =
       newError(errCallNonFunc, node.value.token, valueType)
       break semantics
 
-    if valueType.argTypes.len != node.args.len:
-      newError(errCallArgCount, node.value.token, valueType.argTypes.len, node.args.len)
-      break semantics
+    # TODO: overrides
 
-    for idx in 0..<node.args.len:
-      let expected = valueType.argTypes[idx]
-      let arg = node.args[idx]
+    let expectedArgTypes = @[valueType]
 
+    for arg in node.args:
       ctx.visit(arg)
 
-      if expected.neq arg.exprType:
-        newError(errCallArgType, arg.token, expected, arg.exprType)
-        break semantics
+    let givenArgTypes = ctx.toArgTypes(node.args)
+
+    if givenArgTypes notin expectedArgTypes.mapIt(it.argTypes):
+      let funcName = if node.value.kind == exprIdent:
+        "'" & unident(node.value.token.lexeme) & "'"
+      else:
+        "function"
+      
+      newError(
+        errNoMatchesCallForm, node.token,
+        funcName, "T" & $givenArgTypes, expectedArgTypes.mapIt($it).join("\n")
+      )
+      break semantics
 
     node.setType(ctx, valueType.returnType)
 
@@ -185,21 +214,26 @@ proc visitDeclarationStatement(ctx: Context, node: DeclarationStatement) =
       newError(errRedeclaration, node.name, symbolToken.lexeme, symbolToken.file, symbolToken.line, symbolToken.col)
       break semantics
 
-    ctx.newSymbol(node.name, node.valueType)
+    ctx.newSymbol(node.name, node.valueType, node.mutable)
     node.name.lexeme = ident(node.name.lexeme)
 
 proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement) =
   ctx.visit(node.left)
   ctx.visit(node.right)
 
-  case node.left.kind:
-  of exprIdent, exprDeref:
-    if node.left.exprType.neq node.right.exprType:
-      newError(errTypeMismatch, node.token, node.left.exprType, node.right.exprType)
+  block semantics:
+    if not ctx.isMutableExpression(node.left):
+      newError(errExpectedMutable, node.left.token)
+      break semantics
 
-  else:
-    echo "Unhandled assignment"
-    quit(1)
+    case node.left.kind:
+    of exprIdent, exprDeref:
+      if node.left.exprType.neq node.right.exprType:
+        newError(errTypeMismatch, node.token, node.left.exprType, node.right.exprType)
+
+    else:
+      echo "Unhandled assignment"
+      quit(1)
 
 proc visitBranchingStatement(ctx: Context, node: BranchingStatement) =
   ctx.visit(node.condition)
@@ -269,8 +303,22 @@ proc checkReturnPaths(stmt: Statement): bool =
     return false
   of stmtWhile:
     return false
+  of stmtRegion:
+    let regionStmt = RegionStatement(stmt)
+    if checkReturnPaths(regionStmt.regionBlock):
+      newError(errReturnInsideRegion, regionStmt.token)
+    return false
   else:
     return false
+
+proc toArgTypes*(args: seq[FuncArg]): seq[ArgType] =
+  result = newSeq[ArgType](args.len)
+  for i, arg in args:
+    result[i] = ArgType(
+      name: arg.argToken.lexeme,
+      argType: arg.argType,
+      mutable: arg.mutable
+    )
 
 proc visitFuncStatement(ctx: Context, node: FuncStatement) =
   if ctx.symbolExistsInCurrentScope(node.name.lexeme):
@@ -278,8 +326,8 @@ proc visitFuncStatement(ctx: Context, node: FuncStatement) =
     newError(errRedeclaration, node.name, symbol.definitionToken.lexeme, symbol.definitionToken.file, symbol.definitionToken.line, symbol.definitionToken.col)
     return
 
-  let funcType = getFuncType(node.args.mapIt(it.argType), node.returnType)
-  ctx.newSymbol(node.name, funcType)
+  let funcType = getFuncType(node.args.toArgTypes(), node.returnType)
+  ctx.newSymbol(node.name, funcType, false)
   let name = node.name.lexeme
   node.name.lexeme = ident(node.name.lexeme)
 
@@ -287,7 +335,7 @@ proc visitFuncStatement(ctx: Context, node: FuncStatement) =
   ctx.funcDepth.inc
   
   for arg in node.args:
-    ctx.newSymbol(arg.argToken, arg.argType)
+    ctx.newSymbol(arg.argToken, arg.argType, arg.mutable)
     arg.argToken.lexeme = ident(arg.argToken.lexeme)
   
   let expected = ctx.expectedReturnType
@@ -336,7 +384,7 @@ proc visitRegionStatement(ctx: Context, node: RegionStatement) =
       break semantics
 
     ctx.expectedRegion = getRegionType(node.name)
-    ctx.newSymbol(node.name, ctx.expectedRegion)
+    ctx.newSymbol(node.name, ctx.expectedRegion, true)
     node.name.lexeme = ident(node.name.lexeme)
 
   ctx.visit(node.regionBlock)
@@ -382,5 +430,5 @@ proc checkSemantics*(node: Statement) =
     symbolScopeStack: initTable[string, seq[Scope]](),
     expectedRegion: getRegionType(regionToken)
   )
-  ctx.newSymbol(regionToken, getRegionType(regionToken))
+  ctx.newSymbol(regionToken, getRegionType(regionToken), true)
   ctx.visit(node)

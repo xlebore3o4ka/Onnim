@@ -3,7 +3,8 @@ import /home/xlebore3o4ka/nimProjects/Onnim/src/std/[system]
 var `ident_region` = onnim_system_newArena()
 
 block `transpiled`:
-  var `ident_x`: uint #[ptr int]# = onnim_system_addArena[int](`ident_region`, 10)
-  var `ident_y`: uint #[ptr int]# = onnim_system_addArena[int](`ident_region`, 10)
-  var `ident_a`: int = onnim_system_getArena[int](`ident_region`, `ident_x` + 1000000)
+  onnim_system_region(`SYMt`):
+    var `SYMx`: uint #[ptr int]# = onnim_system_addArena[int](`SYMt`, 10)
+  onnim_system_region(`SYMt`):
+    var `SYMx`: uint #[ptr int]# = onnim_system_addArena[int](`SYMt`, 10)
   quit(0)

@@ -1,5 +1,5 @@
 import tokens, types
-import std/macros
+import std/[macros]
 
 template onnimnode*(kind: untyped) {.pragma.}
 
@@ -131,9 +131,10 @@ type
   FuncArg* = ref object
     argType*: Type
     argToken*: Token
+    mutable*: bool
 
-proc add*(arguments: var seq[FuncArg], argType: Type, argToken: Token) =
-  arguments.add(FuncArg(argType: argType, argToken: argToken))
+proc add*(arguments: var seq[FuncArg], argType: Type, argToken: Token, mutable: bool) =
+  arguments.add(FuncArg(argType: argType, argToken: argToken, mutable: mutable))
 
 constructors: 
   type
@@ -172,8 +173,9 @@ constructors:
       ## bool = token
 
     IdentExpression* {.onnimnode: exprIdent.} = ref object of Expression
-      ## <ident>
+      ## <ident>[!]
       ## ident = token
+      requireImmutable*: bool = false
     
     CallExpression* {.onnimnode: exprCall.} = ref object of Expression
       ## <value> ( [<args>]* )
@@ -203,6 +205,7 @@ constructors:
       valueType*: Type
       name*: Token
       value*: Expression
+      mutable*: bool
 
     AssignmentStatement* {.onnimnode: stmtAssignment.} = ref object of Statement
       ## <left> = <right>

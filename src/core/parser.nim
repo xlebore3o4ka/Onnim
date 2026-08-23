@@ -32,7 +32,7 @@ proc isExpression(self: Parser, token: Token): bool =
   token.kind in {tkLParen, tkNumber, tkTrue, tkFalse, tkIdent, tkBang, tkMinus, tkPlus}
 
 proc isType(self: Parser, token: Token): bool =
-  token.kind in {tkInt64, tkBool, tkUnder}
+  token.kind in {tkInt64, tkBool, tkUnder, tkRegion}
 
 proc parseType(self: var Parser, token: Token): Type =
   case token.kind:
@@ -47,10 +47,19 @@ proc parseType(self: var Parser, token: Token): Type =
     let tok = self.nextToken()
 
     if tok.kind == tkLParen:
-      var argTypes: seq[Type]
+      var argTypes: seq[ArgType]
 
-      while self.peekToken().kind != tkRParen:
-        argTypes.add(self.parseType(self.nextToken()))
+      while self.peekToken().kind != tkRParen and self.peekToken().kind != tkEOF:
+        var argType = ArgType(argType: self.parseType(self.nextToken()))
+        argType.name = self.expectToken(tkIdent).lexeme
+        if self.peekToken().kind == tkDollar:
+          self.skipToken()
+          argType.mutable = true
+        elif self.peekToken().kind == tkBang:
+          self.skipToken()
+          argType.mutable = false
+
+        argTypes.add(argType)
 
         if self.peekToken().kind == tkRParen: break
         discard self.expectToken(tkComma)
@@ -81,7 +90,11 @@ proc parsePrimary(self: var Parser): Expression =
     return newBoolExpression(token)
 
   elif token.kind in {tkIdent, tkRegion}:
-    return newIdentExpression(token)
+    var requireImmutable = false
+    if self.peekToken().kind == tkBang:
+      self.skipToken()
+      requireImmutable = true
+    return newIdentExpression(token, requireImmutable)
 
   self.newError(errExpression, token, token.mean)
   return newInvalidExpression(token)
@@ -103,7 +116,7 @@ proc parsePostfix(self: var Parser): Expression =
 
       var args: seq[Expression]
 
-      while self.peekToken().kind != tkRParen:
+      while self.peekToken().kind != tkRParen and self.peekToken().kind != tkEOF:
         args.add(self.parseExpression())
 
         if self.peekToken().kind == tkRParen: break
@@ -172,10 +185,19 @@ proc parseStatement(self: var Parser): Statement
 proc parseDeclaration(self: var Parser): Statement =
   let valueType = self.parseType(self.nextToken())
   let name = self.expectToken(tkIdent)
+
+  var mutable = true
+  if self.peekToken().kind == tkDollar:
+    self.skipToken()
+    mutable = true
+  elif self.peekToken().kind == tkBang:
+    self.skipToken()
+    mutable = false
+
   let token = self.expectToken(tkEquals)
   let value = self.parseExpression()
 
-  return newDeclarationStatement(token, valueType, name, value)
+  return newDeclarationStatement(token, valueType, name, value, mutable)
 
 proc parseBlock(self: var Parser, endKinds: varargs[TokenKind], consume: bool = true): BlockStatement =
   discard self.expectToken(tkDo)
@@ -238,8 +260,19 @@ proc parseFunc(self: var Parser): Statement =
 
   var args: seq[FuncArg]
 
-  while self.peekToken().kind != tkRParen:
-    args.add(self.parseType(self.nextToken()), self.expectToken(tkIdent))
+  while self.peekToken().kind != tkRParen and self.peekToken().kind != tkEOF:
+    let argType = self.parseType(self.nextToken())
+    let name = self.expectToken(tkIdent)
+
+    var mutable = false
+    if self.peekToken().kind == tkDollar:
+      self.skipToken()
+      mutable = true
+    elif self.peekToken().kind == tkBang:
+      self.skipToken()
+      mutable = false
+
+    args.add(argType, name, mutable)
 
     if self.peekToken().kind == tkRParen: break
     discard self.expectToken(tkComma)
@@ -269,7 +302,10 @@ proc parseRegion(self: var Parser): Statement =
 proc parseStatement(self: var Parser): Statement =
   let token = self.lexer.peekToken()
 
-  if self.isType(token):
+  if token.kind == tkRegion:
+    return self.parseRegion()
+
+  elif self.isType(token):
     return self.parseDeclaration()
 
   elif token.kind == tkIf:
@@ -289,9 +325,6 @@ proc parseStatement(self: var Parser): Statement =
 
   elif token.kind == tkReturn:
     return self.parseReturn()
-
-  elif token.kind == tkRegion:
-    return self.parseRegion()
 
   elif self.isExpression(token):
     let expr = self.parseExpression()

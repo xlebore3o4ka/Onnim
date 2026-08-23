@@ -5,4 +5,5 @@ nimble.develop
 nimble.paths
 nimbledeps
 bin/
-changes.txt
+gitchanges.txt
+all_files.txt

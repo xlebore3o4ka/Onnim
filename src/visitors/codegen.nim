@@ -26,7 +26,8 @@ proc nimtype(t: Type): string =
     var args: string
     for i, argt in t.argTypes:
       if i != 0: args &= ", "
-      args &= fmt"arg{i}: {nimtype(argt)}"
+      let isVar = if argt.mutable: " var" else: ""
+      args &= fmt"{argt.name}:{isVar} {nimtype(argt.argType)}"
     if t.returnType.neq(typeUndefined):
       return fmt"proc ({args}): {t.returnType}"
     return fmt"proc ({args})"
@@ -90,7 +91,8 @@ proc visitBlockStatement(ctx: Context, node: BlockStatement): string =
   ctx.indent -= 1
 
 proc visitDeclarationStatement(ctx: Context, node: DeclarationStatement): string =
-  result = fmt"var {node.name.lexeme}: {nimtype(node.valueType)} = {ctx.visit(node.value)}"
+  let keyword = if node.mutable: "var" else: "let"
+  result = fmt"{keyword} {node.name.lexeme}: {nimtype(node.valueType)} = {ctx.visit(node.value)}"
 
 proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement): string =
   result = fmt"{ctx.visit(node.left)} = {ctx.visit(node.right)}"
@@ -115,12 +117,13 @@ proc visitFuncStatement(ctx: Context, node: FuncStatement): string =
   result = fmt"proc {node.name.lexeme}("
   for i, arg in node.args:
     if i != 0: result &= ", "
-    result &= fmt"{arg.argToken.lexeme}: {nimtype(arg.argType)}"
+    let varPrefix = if arg.mutable: "var " else: ""
+    result &= fmt"{arg.argToken.lexeme}: {varPrefix}{nimtype(arg.argType)}"
   result &= ")"
   if node.returnType.neq(typeUndefined):
     result &= fmt": {nimtype(node.returnType)}"
   result &= fmt" = {ctx.visit(node.funcBlock)}"
-
+  
 proc visitReturnStatement(ctx: Context, node: ReturnStatement): string =
   if node.value == nil:
     return "return"
