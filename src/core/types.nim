@@ -95,7 +95,7 @@ proc getRegionType*(name: Token): Type =
 
 proc `$`*(k: TypeKind): string =
   case k
-  of typeUndefined: "unset"
+  of typeUndefined: "undefined"
   of typeInt:       "int"
 
   of typeBool:      "bool"
@@ -115,5 +115,5 @@ proc `$`*(t: Type): string =
   of typePtr:
     return $t.ptrBase & "^" & $t.ptrRegion.regionName.lexeme
   of typeRegion:
-    return "region " & $t.regionName.lexeme
+    return "region '" & $t.regionName.lexeme & "'"
   else: return $t.kind

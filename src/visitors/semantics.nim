@@ -58,8 +58,11 @@ proc visit(ctx: Context, node: Statement)
 proc setType(node: Expression, ctx: Context, exprType: Type) {.inline.} =
   node.exprType = exprType
 
-proc isInteger(typ: TypeKind): bool {.inline.} = typ in {typeInt}
-proc isInteger(typ: Type):     bool {.inline.} = isInteger(typ.kind)
+proc isArithmetizable(typ: TypeKind): bool {.inline.} = typ in {typeInt, typePtr}
+proc isArithmetizable(typ: Type):     bool {.inline.} = isArithmetizable(typ.kind)
+
+proc isСomparable(typ: TypeKind): bool {.inline.} = typ in {typeInt, typePtr}
+proc isСomparable(typ: Type):     bool {.inline.} = isСomparable(typ.kind)
 
 proc visitNumberExpression(ctx: Context, node: NumberExpression) =
   node.setType(ctx, int64Type)
@@ -72,7 +75,7 @@ proc visitUnaryExpression(ctx: Context, node: UnaryExpression) =
   let op  = node.token.kind
   let typ = node.value.exprType
 
-  if typ.isInteger() and op in {tkPlus, tkMinus}:
+  if typ.isArithmetizable() and op in {tkPlus, tkMinus}:
     node.setType(ctx, node.value.exprType)
 
   elif typ.eq(typeBool) and op == tkBang:
@@ -86,7 +89,12 @@ proc visitBinaryExpression(ctx: Context, node: BinaryExpression) =
   ctx.visit(node.right)
 
   block typeSemantics:
-    if node.left.exprType.neq(node.right.exprType) and node.left.exprType.neq(typeRegion):
+    if
+      not (node.left.exprType.isArithmetizable() and node.right.exprType.isArithmetizable()) and
+      not (node.left.exprType.isСomparable() and node.right.exprType.isСomparable()) and
+      node.left.exprType.neq(typeRegion) and
+      node.left.exprType.neq(node.right.exprType):
+
       newError(errBinaryTypeMismatch, node.token, node.token.lexeme, node.left.exprType, node.right.exprType)
       break typeSemantics
 
@@ -94,9 +102,9 @@ proc visitBinaryExpression(ctx: Context, node: BinaryExpression) =
     let op  = node.token.kind
 
     block opSemantics:
-      if   typ.isInteger() and op in {tkPlus, tkMinus, tkStar, tkSlash, tkPercent}: 
+      if   typ.isArithmetizable() and op in {tkPlus, tkMinus, tkStar, tkSlash, tkPercent}: 
         break opSemantics
-      elif typ.isInteger() and op in {tkGT, tkLT, tkGTE, tkLTE, tkEqualsEquals, tkBangEquals}: 
+      elif typ.isСomparable() and op in {tkGT, tkLT, tkGTE, tkLTE, tkEqualsEquals, tkBangEquals}: 
         typ = boolType
         break opSemantics
       elif typ.eq(boolType) and op in {tkAnd, tkOr, tkEqualsEquals, tkBangEquals}: 

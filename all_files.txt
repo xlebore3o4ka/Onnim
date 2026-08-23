@@ -1,0 +1,1792 @@
+=== Файл: ./.gitignore ===
+nimcache/
+nimblecache/
+htmldocs/
+nimble.develop
+nimble.paths
+nimbledeps
+bin/
+changes.txt
+
+=== Файл: ./onnim.nimble ===
+# Package
+
+version       = "0.1.0"
+author        = "xlebore3o4ka"
+description   = "-"
+license       = "AGPL-3.0-or-later"
+srcDir        = "src"
+binDir        = "bin"
+bin           = @["onnim"]
+
+# Dependencies
+
+requires "nim >= 2.2.10"
+
+task myRun, "Run with debug flags":
+  exec "nimble run --debugger:native --stacktrace:on --linetrace:on --define:debug -- " & commandLineParams.join(" ")
+
+task allFiles, "Save all files content to file all_files.txt":
+  let ignoredPathes = @["./bin/*", "./.git/*", "./examples/*"]
+  let ignoredNames  = @["all_files.txt", "LICENSE"]
+  
+  var pathFilters = ""
+  for p in ignoredPathes:
+    pathFilters &= " -not -path \"" & p & "\""
+  
+  var nameFilters = ""
+  for n in ignoredNames:
+    nameFilters &= " -not -name \"" & n & "\""
+  
+  let cmd = "find . -type f" & pathFilters & nameFilters & " -exec sh -c 'echo \"=== Файл: {} ===\" && cat {} && echo \"\"' \\; > all_files.txt"
+  
+  exec cmd
+
+=== Файл: ./config.nims ===
+# begin Nimble config (version 2)
+when withDir(thisDir(), system.fileExists("nimble.paths")):
+  include "nimble.paths"
+# end Nimble config
+
+=== Файл: ./nimble.paths ===
+--noNimblePath
+--path:"/home/xlebore3o4ka/nimProjects/Onnim/src"
+
+=== Файл: ./.gitattributes ===
+# Auto detect text files and perform LF normalization
+* text=auto
+
+=== Файл: ./src/onnim.nim ===
+import std/[os, osproc, parseopt]
+import core/[errors, parser]
+import visitors/[semantics, codegen]
+
+proc main() =
+  var
+    filename: string
+
+  for kind, key, val in getopt():
+    case kind
+    of cmdLongOption, cmdShortOption:
+      case key
+      # of "release", "r": release = true
+      else: discard
+    of cmdArgument:
+      if filename == "": filename = key
+    of cmdEnd: discard
+
+  if filename == "":
+    echo "Using: ", getAppFilename().extractFilename(), " <file>"
+    return
+
+  if not fileExists(filename):
+    echo "Error: file not found - ", filename
+    return
+
+  let content = readFile(filename)
+  var parser = newParser(content, filename)
+
+  let code = parser.parse()
+
+  block errorProne:
+    if errors.errors.len != 0: break errorProne
+    checkSemantics(code)
+
+    if errors.errors.len != 0: break errorProne
+    let code = generateCode(code)
+
+    if errors.errors.len != 0: break errorProne
+    
+    let outputFile = filename.changeFileExt("")
+    let nimFile = outputFile & ".nim"
+    let exeFile = outputFile & (when defined(windows): ".exe" else: "")
+    
+    writeFile(nimFile, code)
+    
+    let nimCmd = "nim c -o:" & exeFile & " " & nimFile
+    if execCmd(nimCmd) != 0:
+      echo "Compilation failed [" & nimCmd & "]"
+
+  if errors.errors.len != 0:
+    for e in errors.errors:
+      echo e.kind, ' ', e.message, ' ', e.args
+
+when isMainModule:
+  main()
+=== Файл: ./src/visitors/semantics.nim ===
+import ../core/[ast, types, tokens, errors]
+import std/[tables, sequtils, strutils]
+
+type
+  Symbol = object
+    definitionToken: Token
+    symbolType: Type
+    mutable: bool = true
+
+  Scope = ref object
+    depth: Natural
+    symbolTable: Table[string, Symbol]
+    case isGlobal: bool
+    of false: parent: Scope
+    of true: discard
+
+  Context = ref object
+    currentScope: Scope
+    symbolScopeStack: Table[string, seq[Scope]]
+
+    loopDepth: Natural
+    funcDepth: Natural
+
+    expectedReturnType: Type
+    expectedRegion: Type
+
+template ident*(name: string): string = "`ident_" & (if not name.endswith("_"): name else: name & "X") & "`"
+
+proc newSymbol(self: Context, name: Token, symbolType: Type, mutable: bool) =
+  self.currentScope.symbolTable[name.lexeme] = Symbol(definitionToken: name, symbolType: symbolType, mutable: mutable)
+  self.symbolScopeStack.mgetOrPut(name.lexeme, @[]).add(self.currentScope)
+
+proc pushScope(self: Context) =
+  let depth = self.currentScope.depth
+  self.currentScope = Scope(isGlobal: false, symbolTable: initTable[string, Symbol](), 
+    parent: self.currentScope, depth: depth + 1)
+
+proc popScope(self: Context) =
+  let scope = self.currentScope
+  for name in scope.symbolTable.keys:
+    discard self.symbolScopeStack[name].pop()
+  self.currentScope = scope.parent
+
+proc getSymbol(self: Context, name: string): Symbol =
+  let scope = self.symbolScopeStack[name][^1]
+  result = scope.symbolTable[name]
+
+proc symbolExists(self: Context, name: string): bool =
+  let exists = name in self.symbolScopeStack and self.symbolScopeStack[name].len > 0
+  return exists
+
+proc symbolExistsInCurrentScope(self: Context, name: string): bool =
+  let exists = name in self.currentScope.symbolTable
+  return exists
+
+proc visit(ctx: Context, node: Expression)
+proc visit(ctx: Context, node: Statement)
+
+proc setType(node: Expression, ctx: Context, exprType: Type) {.inline.} =
+  node.exprType = exprType
+
+proc isArithmetizable(typ: TypeKind): bool {.inline.} = typ in {typeInt, typePtr}
+proc isArithmetizable(typ: Type):     bool {.inline.} = isArithmetizable(typ.kind)
+
+proc isСomparable(typ: TypeKind): bool {.inline.} = typ in {typeInt, typePtr}
+proc isСomparable(typ: Type):     bool {.inline.} = isСomparable(typ.kind)
+
+proc visitNumberExpression(ctx: Context, node: NumberExpression) =
+  node.setType(ctx, int64Type)
+
+proc visitBoolExpression(ctx: Context, node: BoolExpression) =
+  node.setType(ctx, boolType)
+
+proc visitUnaryExpression(ctx: Context, node: UnaryExpression) =
+  ctx.visit(node.value)
+  let op  = node.token.kind
+  let typ = node.value.exprType
+
+  if typ.isArithmetizable() and op in {tkPlus, tkMinus}:
+    node.setType(ctx, node.value.exprType)
+
+  elif typ.eq(typeBool) and op == tkBang:
+    node.setType(ctx, node.value.exprType)
+
+  else:
+    newError(errUnaryTypeMismatch, node.token, node.token.lexeme, typ)
+
+proc visitBinaryExpression(ctx: Context, node: BinaryExpression) =
+  ctx.visit(node.left)
+  ctx.visit(node.right)
+
+  block typeSemantics:
+    if
+      not (node.left.exprType.isArithmetizable() and node.right.exprType.isArithmetizable()) and
+      not (node.left.exprType.isСomparable() and node.right.exprType.isСomparable()) and
+      node.left.exprType.neq(typeRegion) and
+      node.left.exprType.neq(node.right.exprType):
+
+      newError(errBinaryTypeMismatch, node.token, node.token.lexeme, node.left.exprType, node.right.exprType)
+      break typeSemantics
+
+    var typ = node.left.exprType
+    let op  = node.token.kind
+
+    block opSemantics:
+      if   typ.isArithmetizable() and op in {tkPlus, tkMinus, tkStar, tkSlash, tkPercent}: 
+        break opSemantics
+      elif typ.isСomparable() and op in {tkGT, tkLT, tkGTE, tkLTE, tkEqualsEquals, tkBangEquals}: 
+        typ = boolType
+        break opSemantics
+      elif typ.eq(boolType) and op in {tkAnd, tkOr, tkEqualsEquals, tkBangEquals}: 
+        break opSemantics
+      elif typ.eq(typeRegion) and op == tkAt: 
+        typ = getPtrType(node.right.exprType, typ)
+        break opSemantics
+
+      newError(errBinaryTypeMismatch, node.token, node.token.lexeme, node.left.exprType, node.right.exprType)
+      break typeSemantics
+    
+    node.setType(ctx, typ)
+
+proc visitIdentExpression(ctx: Context, node: IdentExpression) =
+  let name = node.token.lexeme
+
+  if not ctx.symbolExists(name):
+    newError(errUndeclaredSymbol, node.token, name)
+
+  else:
+    node.setType(ctx, ctx.getSymbol(name).symbolType)
+    node.token.lexeme = ident(node.token.lexeme)
+
+proc visitCallExpression(ctx: Context, node: CallExpression) =
+  ctx.visit(node.value)
+
+  let valueType = node.value.exprType
+
+  block semantics:
+    if valueType.neq typeFunc:
+      newError(errCallNonFunc, node.value.token, valueType)
+      break semantics
+
+    if valueType.argTypes.len != node.args.len:
+      newError(errCallArgCount, node.value.token, valueType.argTypes.len, node.args.len)
+      break semantics
+
+    for idx in 0..<node.args.len:
+      let expected = valueType.argTypes[idx]
+      let arg = node.args[idx]
+
+      ctx.visit(arg)
+
+      if expected.neq arg.exprType:
+        newError(errCallArgType, arg.token, expected, arg.exprType)
+        break semantics
+
+    node.setType(ctx, valueType.returnType)
+
+proc visitDerefExpression(ctx: Context, node: DerefExpression) =
+  ctx.visit(node.value)
+
+  if node.value.exprType.neq typePtr:
+    newError(errTypeMismatch, node.value.token, typePtr, node.value.exprType)
+
+  else:
+    node.setType(ctx, node.value.exprType.ptrBase)
+
+
+# STATEMENTS
+
+
+proc visitBlockStatement(ctx: Context, node: BlockStatement) =
+  for stmt in node.statements:
+    ctx.visit(stmt)
+
+proc visitDeclarationStatement(ctx: Context, node: DeclarationStatement) =
+  block semantics:
+    ctx.visit(node.value)
+
+    if node.value.exprType.neq node.valueType:
+      newError(errDeclarationTypeMismatch, node.token, node.valueType, node.name.lexeme, node.value.exprType)
+      break semantics
+
+    if ctx.symbolExistsInCurrentScope(node.name.lexeme):
+      let symbol = ctx.getSymbol(node.name.lexeme)
+      let symbolToken = symbol.definitionToken
+      newError(errRedeclaration, node.name, symbolToken.lexeme, symbolToken.file, symbolToken.line, symbolToken.col)
+      break semantics
+
+    ctx.newSymbol(node.name, node.valueType, node.mutable)
+    node.name.lexeme = ident(node.name.lexeme)
+
+proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement) =
+  ctx.visit(node.left)
+  ctx.visit(node.right)
+
+  case node.left.kind:
+  of exprIdent, exprDeref:
+    if node.left.exprType.neq node.right.exprType:
+      newError(errTypeMismatch, node.token, node.left.exprType, node.right.exprType)
+
+  else:
+    echo "Unhandled assignment"
+    quit(1)
+
+proc visitBranchingStatement(ctx: Context, node: BranchingStatement) =
+  ctx.visit(node.condition)
+  if node.condition.exprType.neq(boolType):
+    newError(errTypeMismatch, node.condition.token, node.condition.exprType, boolType)
+  
+  else:
+    ctx.pushScope()
+    ctx.visit(node.ifBlock)
+    ctx.popScope()
+  
+  for elifBranch in node.elifBranches:
+    ctx.visit(elifBranch.cond)
+    if elifBranch.cond.exprType.neq(boolType):
+      newError(errTypeMismatch, elifBranch.cond.token, elifBranch.cond.exprType, boolType)
+
+    else:
+      ctx.pushScope()
+      ctx.visit(elifBranch.elifBlock)
+      ctx.popScope()
+  
+  if node.elseBlock != nil:
+    ctx.pushScope()
+    ctx.visit(node.elseBlock)
+    ctx.popScope()
+
+proc visitWhileStatement(ctx: Context, node: WhileStatement) =
+  ctx.visit(node.condition)
+  if node.condition.exprType.neq(boolType):
+    newError(errTypeMismatch, node.condition.token, node.condition.exprType, boolType)
+
+  else:
+    ctx.pushScope()
+    ctx.loopDepth.inc
+    ctx.visit(node.whileBlock)
+    ctx.loopDepth.dec
+    ctx.popScope()
+
+proc visitContinueStatement(ctx: Context, node: ContinueStatement) =
+  if ctx.loopDepth == 0:
+    newError(errControlFlowOutsideLoop, node.token, "continue")
+
+proc visitBreakStatement(ctx: Context, node: BreakStatement) =
+  if ctx.loopDepth == 0:
+    newError(errControlFlowOutsideLoop, node.token, "break")
+
+proc checkReturnPaths(stmt: Statement): bool =
+  case stmt.kind:
+  of stmtReturn:
+    return true
+  of stmtBlock:
+    let blockStmt = BlockStatement(stmt)
+    for s in blockStmt.statements:
+      if checkReturnPaths(s):
+        return true
+    return false
+  of stmtBranching:
+    let branchStmt = BranchingStatement(stmt)
+    var hasElse = branchStmt.elseBlock != nil
+    for elifBranch in branchStmt.elifBranches:
+      if checkReturnPaths(elifBranch.elifBlock):
+        return true
+    if branchStmt.ifBlock != nil and checkReturnPaths(branchStmt.ifBlock):
+      return true
+    if hasElse and checkReturnPaths(branchStmt.elseBlock):
+      return true
+    return false
+  of stmtWhile:
+    return false
+  of stmtRegion:
+    let regionStmt = RegionStatement(stmt)
+    if checkReturnPaths(regionStmt.regionBlock):
+      newError(errReturnInsideRegion, regionStmt.token)
+    return false
+  else:
+    return false
+
+proc visitFuncStatement(ctx: Context, node: FuncStatement) =
+  if ctx.symbolExistsInCurrentScope(node.name.lexeme):
+    let symbol = ctx.getSymbol(node.name.lexeme)
+    newError(errRedeclaration, node.name, symbol.definitionToken.lexeme, symbol.definitionToken.file, symbol.definitionToken.line, symbol.definitionToken.col)
+    return
+
+  let funcType = getFuncType(node.args.mapIt(it.argType), node.returnType)
+  ctx.newSymbol(node.name, funcType, false)
+  let name = node.name.lexeme
+  node.name.lexeme = ident(node.name.lexeme)
+
+  ctx.pushScope()
+  ctx.funcDepth.inc
+  
+  for arg in node.args:
+    ctx.newSymbol(arg.argToken, arg.argType, arg.mutable)
+    arg.argToken.lexeme = ident(arg.argToken.lexeme)
+  
+  let expected = ctx.expectedReturnType
+  ctx.expectedReturnType = node.returnType
+
+  if not ctx.expectedReturnType.eq(typeUndefined):
+    if not checkReturnPaths(node.funcBlock):
+      newError(errMissingReturn, node.name, name)
+
+  ctx.visit(node.funcBlock)
+
+  ctx.expectedReturnType = expected
+  
+  ctx.funcDepth.dec
+  ctx.popScope()
+
+proc visitReturnStatement(ctx: Context, node: ReturnStatement) =
+  if ctx.funcDepth == 0:
+    newError(errReturnOutsideFunc, node.token)
+    return
+
+  if ctx.expectedReturnType.eq(typeUndefined):
+    if node.value != nil:
+      newError(errReturnValue, node.token)
+  else:
+    if node.value == nil:
+      newError(errReturnTypeMismatch, node.token, ctx.expectedReturnType, undefinedType)
+    else:
+      ctx.visit(node.value)
+      if node.value.exprType.neq(ctx.expectedReturnType):
+        newError(errReturnTypeMismatch, node.token, ctx.expectedReturnType, node.value.exprType)
+
+proc visitCallStatement(ctx: Context, node: CallStatement) =
+  ctx.visit(node.expr)
+
+proc visitRegionStatement(ctx: Context, node: RegionStatement) =
+  ctx.pushScope()
+
+  let temp = ctx.expectedRegion
+
+  block semantics:
+    if ctx.symbolExistsInCurrentScope(node.name.lexeme):
+      let symbol = ctx.getSymbol(node.name.lexeme)
+      let symbolToken = symbol.definitionToken
+      newError(errRedeclaration, node.name, symbolToken.lexeme, symbolToken.file, symbolToken.line, symbolToken.col)
+      break semantics
+
+    ctx.expectedRegion = getRegionType(node.name)
+    ctx.newSymbol(node.name, ctx.expectedRegion, true)
+    node.name.lexeme = ident(node.name.lexeme)
+
+  ctx.visit(node.regionBlock)
+
+  ctx.expectedRegion = temp
+  
+  ctx.popScope()
+
+proc visit(ctx: Context, node: Expression) =
+  case node.kind:
+  of exprNumber: visitNumberExpression(ctx, NumberExpression(node))
+  of exprBool: visitBoolExpression(ctx, BoolExpression(node))
+  of exprUnary: visitUnaryExpression(ctx, UnaryExpression(node))
+  of exprBinary: visitBinaryExpression(ctx, BinaryExpression(node))
+  of exprIdent: visitIdentExpression(ctx, IdentExpression(node))
+  of exprCall: visitCallExpression(ctx, CallExpression(node))
+  of exprDeref: visitDerefExpression(ctx, DerefExpression(node))
+  else: discard
+
+proc visit(ctx: Context, node: Statement) =
+  case node.kind:
+  of stmtBlock: visitBlockStatement(ctx, BlockStatement(node))
+  of stmtDeclaration: visitDeclarationStatement(ctx, DeclarationStatement(node))
+  of stmtAssignment: visitAssignmentStatement(ctx, AssignmentStatement(node))
+  of stmtBranching: visitBranchingStatement(ctx, BranchingStatement(node))
+  of stmtWhile: visitWhileStatement(ctx, WhileStatement(node))
+  of stmtContinue: visitContinueStatement(ctx, ContinueStatement(node))
+  of stmtBreak: visitBreakStatement(ctx, BreakStatement(node))
+  of stmtFunc: visitFuncStatement(ctx, FuncStatement(node))
+  of stmtReturn: visitReturnStatement(ctx, ReturnStatement(node))
+  of stmtCall: visitCallStatement(ctx, CallStatement(node))
+  of stmtRegion: visitRegionStatement(ctx, RegionStatement(node))
+  else: discard
+
+proc checkSemantics*(node: Statement) =
+  let regionToken = Token(lexeme: "region")
+  var ctx = Context(
+    currentScope: Scope(
+      depth: 0,
+      isGlobal: true,
+      symbolTable: initTable[string, Symbol]()
+    ),
+    symbolScopeStack: initTable[string, seq[Scope]](),
+    expectedRegion: getRegionType(regionToken)
+  )
+  ctx.newSymbol(regionToken, getRegionType(regionToken), true)
+  ctx.visit(node)
+
+=== Файл: ./src/visitors/codegen.nim ===
+import ../core/[ast, types, tokens]
+import std/[strformat, sequtils, strutils, os]
+from semantics import ident
+
+const apiprefix = "onnim"
+
+type
+  Context = ref object
+    indent = 0
+
+template indent(ctx: Context): string = "  ".repeat(ctx.indent)
+template apicall(name: string, args: varargs[string, `$`], module: string = "", types: seq[string] = @[]): string = 
+  apiprefix & (
+    if module != "": "_" & module 
+    else: ""
+  ) & "_" & name & (
+    if types.len != 0: "[" & types.join(", ") & "]"
+    else: ""
+  ) & "(" & args.join(", ") & ")"
+
+proc nimtype(t: Type): string =
+  case t.kind:
+  of typeInt: return "int"
+  of typeBool: return "bool"
+  of typeFunc: 
+    var args: string
+    for i, argt in t.argTypes:
+      if i != 0: args &= ", "
+      args &= fmt"arg{i}: {nimtype(argt)}"
+    if t.returnType.neq(typeUndefined):
+      return fmt"proc ({args}): {t.returnType}"
+    return fmt"proc ({args})"
+  of typePtr:
+    return fmt"uint #[ptr {nimtype(t.ptrBase)}]#"
+  else: 
+    echo "Unhandled type: ", t 
+    quit(1)
+
+proc visit(ctx: Context, node: Expression): string
+proc visit(ctx: Context, node: Statement): string
+
+proc visitNumberExpression(ctx: Context, node: NumberExpression): string =
+  return node.token.lexeme
+
+proc visitBoolExpression(ctx: Context, node: BoolExpression): string =
+  return node.token.lexeme
+
+proc visitUnaryExpression(ctx: Context, node: UnaryExpression): string =
+  return node.token.lexeme & ctx.visit(node.value)
+
+proc visitBinaryExpression(ctx: Context, node: BinaryExpression): string =
+  var op = node.token.lexeme
+  if node.token.kind == tkPercent:
+    op = "mod"
+  elif node.token.kind == tkAt:
+    return apicall(
+      "addArena", 
+      ctx.visit(node.left), ctx.visit(node.right), 
+      module = "system",
+      types = @[nimtype(node.right.exprType)]
+    )
+  return fmt"{ctx.visit(node.left)} {op} {ctx.visit(node.right)}"
+
+proc visitIdentExpression(ctx: Context, node: IdentExpression): string =
+  return node.token.lexeme
+
+proc visitCallExpression(ctx: Context, node: CallExpression): string =
+  let fn = ctx.visit(node.value)
+  let args = node.args.mapIt( ctx.visit(it) ).join(", ")
+  return fmt"{fn}({args})"
+
+proc visitDerefExpression(ctx: Context, node: DerefExpression): string =
+  return apicall("getArena", 
+    ident(node.value.exprType.ptrRegion.regionName.lexeme), ctx.visit(node.value), 
+    module = "system", 
+    types = @[nimtype(node.value.exprType.ptrBase)]
+  )
+
+
+# STATEMENTS
+
+
+proc visitBlockStatement(ctx: Context, node: BlockStatement): string =
+  result = "\n"
+  ctx.indent += 1
+  for i, stmt in node.statements:
+    if i != 0:
+      result &= "\n"
+    result &= indent(ctx) & ctx.visit(stmt)
+  ctx.indent -= 1
+
+proc visitDeclarationStatement(ctx: Context, node: DeclarationStatement): string =
+  result = fmt"var {node.name.lexeme}: {nimtype(node.valueType)} = {ctx.visit(node.value)}"
+
+proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement): string =
+  result = fmt"{ctx.visit(node.left)} = {ctx.visit(node.right)}"
+
+proc visitBranchingStatement(ctx: Context, node: BranchingStatement): string =
+  result = fmt"if {ctx.visit(node.condition)}:{ctx.visit(node.ifBlock)}"
+  for (cond, elifBlock) in node.elifBranches:
+    result &= indent(ctx) & fmt"elif {ctx.visit(cond)}:{ctx.visit(elifBlock)}"
+  if node.elseBlock != nil:
+    result &= indent(ctx) & fmt"else:{ctx.visit(node.elseBlock)}"
+
+proc visitWhileStatement(ctx: Context, node: WhileStatement): string =
+  result = fmt"while {ctx.visit(node.condition)}:{ctx.visit(node.whileBlock)}"
+
+proc visitContinueStatement(ctx: Context, node: ContinueStatement): string =
+  result = "continue"
+
+proc visitBreakStatement(ctx: Context, node: BreakStatement): string =
+  result = "break"
+
+proc visitFuncStatement(ctx: Context, node: FuncStatement): string =
+  result = fmt"proc {node.name.lexeme}("
+  for i, arg in node.args:
+    if i != 0: result &= ", "
+    result &= fmt"{arg.argToken.lexeme}: {nimtype(arg.argType)}"
+  result &= ")"
+  if node.returnType.neq(typeUndefined):
+    result &= fmt": {nimtype(node.returnType)}"
+  result &= fmt" = {ctx.visit(node.funcBlock)}"
+
+proc visitReturnStatement(ctx: Context, node: ReturnStatement): string =
+  if node.value == nil:
+    return "return"
+  result = fmt"return {ctx.visit(node.value)}"
+
+proc visitCallStatement(ctx: Context, node: CallStatement): string =
+  return (if node.expr.exprType.neq(typeUndefined): "discard " else: "") & ctx.visit(node.expr)
+
+proc visitRegionStatement(ctx: Context, node: RegionStatement): string =
+  return apicall("region", node.name.lexeme, module="system") & ":" & ctx.visit(node.regionBlock)
+
+proc visit(ctx: Context, node: Expression): string =
+  case node.kind:
+  of exprNumber: return visitNumberExpression(ctx, NumberExpression(node))
+  of exprBool: return visitBoolExpression(ctx, BoolExpression(node))
+  of exprUnary: return visitUnaryExpression(ctx, UnaryExpression(node))
+  of exprBinary: return visitBinaryExpression(ctx, BinaryExpression(node))
+  of exprIdent: return visitIdentExpression(ctx, IdentExpression(node))
+  of exprCall: return visitCallExpression(ctx, CallExpression(node))
+  of exprDeref: return visitDerefExpression(ctx, DerefExpression(node))
+  else: discard
+
+proc visit(ctx: Context, node: Statement): string =
+  case node.kind:
+  of stmtBlock: return visitBlockStatement(ctx, BlockStatement(node))
+  of stmtDeclaration: return visitDeclarationStatement(ctx, DeclarationStatement(node))
+  of stmtAssignment: return visitAssignmentStatement(ctx, AssignmentStatement(node))
+  of stmtBranching: return visitBranchingStatement(ctx, BranchingStatement(node))
+  of stmtWhile: return visitWhileStatement(ctx, WhileStatement(node))
+  of stmtContinue: return visitContinueStatement(ctx, ContinueStatement(node))
+  of stmtBreak: return visitBreakStatement(ctx, BreakStatement(node))
+  of stmtFunc: return visitFuncStatement(ctx, FuncStatement(node))
+  of stmtReturn: return visitReturnStatement(ctx, ReturnStatement(node))
+  of stmtCall: return visitCallStatement(ctx, CallStatement(node))
+  of stmtRegion: return visitRegionStatement(ctx, RegionStatement(node))
+  else: discard
+
+proc generateCode*(node: Statement): string =
+  var ctx = Context()
+  result = &"""import {currentSourcePath().absolutePath()}/src/std/[system]
+
+var `ident_region` = onnim_system_newArena()
+
+block `transpiled`:""" & ctx.visit(node) & "\n"
+  ctx.indent.inc
+  result &= ctx.indent() & "quit(0)"
+=== Файл: ./src/std/system.nim ===
+{.push checks: off.}
+
+const onnim_system_ARENA_INITIAL_SIZE = 4096
+
+type
+  onnim_system_Arena* = object
+    size*: uint = onnim_system_ARENA_INITIAL_SIZE
+    len*: uint = 0
+    arena*: ptr UncheckedArray[byte]
+
+proc onnim_system_addArena*[T](arena: var onnim_system_Arena, value: T): uint =
+  const align = uint(alignof(T)) - 1
+  arena.len = (arena.len + align) and not align
+
+  let newLen = arena.len + uint(sizeof(T))
+  if unlikely(newLen > arena.size):
+    let newSize = newLen * 2
+    arena.arena = cast[ptr UncheckedArray[byte]](realloc(arena.arena, newSize))
+    arena.size = newSize
+  
+  let idx = arena.len
+  cast[ptr T](addr arena.arena[idx])[] = value
+  arena.len = newLen
+  return idx
+
+proc onnim_system_getArena*[T](arena: var onnim_system_Arena, index: uint): var T {.inline.} =
+  if index + uint(sizeof(T)) <= arena.len:
+    return cast[ptr T](addr arena.arena[index])[]
+  raise newException(IndexDefect, "Index out of bounds")
+
+template onnim_system_newArena*(size: uint = onnim_system_ARENA_INITIAL_SIZE): onnim_system_Arena =
+  onnim_system_Arena(arena: cast[ptr UncheckedArray[byte]](alloc(size)))
+
+template onnim_system_killArena*(onnim_arena: var onnim_system_Arena) =
+  if onnim_arena.arena != nil:
+    dealloc(onnim_arena.arena)
+    onnim_arena.arena = nil
+
+import macros
+
+macro onnim_system_region*(name: untyped, regionBlock: untyped): untyped =
+  return quote do:
+    block:
+      var `name` = onnim_system_newArena()
+      `regionBlock`
+      onnim_system_killArena(`name`)
+
+{.pop.}
+=== Файл: ./src/core/ast.nim ===
+import tokens, types
+import std/macros
+
+template onnimnode*(kind: untyped) {.pragma.}
+
+
+proc unstar(n: NimNode): NimNode =
+  if n.kind == nnkPostfix:
+    n[1]
+  else:
+    n
+
+proc getTypeName(n: NimNode): NimNode =
+  if n.kind == nnkPragmaExpr:
+    return unstar(n[0])
+
+  unstar(n)
+
+proc getPragmas(n: NimNode): NimNode =
+  if n.kind == nnkPragmaExpr:
+    return n[1]
+
+  newEmptyNode()
+
+proc makeConstructor(typeName, kindValue, objectTy: NimNode): NimNode =
+  let parentType = objectTy[1][0]
+  var params: seq[NimNode] = @[]
+  params.add typeName
+  params.add newIdentDefs(
+    ident("token"),
+    ident("Token")
+  )
+
+  var body = newStmtList()
+  body.add quote do:
+    new(result)
+  body.add quote do:
+    result.kind = `kindValue`
+  body.add quote do:
+    result.token = token
+
+  if objectTy[2].kind == nnkRecList:
+    for field in objectTy[2]:
+      if field.kind != nnkIdentDefs:
+        continue
+        
+      let fieldType = field[1]
+      let fieldName = unstar(field[0])
+      params.add newIdentDefs(
+        fieldName,
+        fieldType
+      )
+      body.add quote do:
+        result.`fieldName` = `fieldName`
+
+  if eqIdent(parentType, "Expression"):
+    params.add newIdentDefs(
+      ident("exprType"),
+      ident("Type"),
+      quote do:
+        types.undefinedType
+    )
+
+    body.add quote do:
+      result.exprType = exprType
+
+  result = newProc(
+    name = postfix(ident("new" & $typeName), "*"),
+    params = params,
+    body = body
+  )
+
+proc isAstNode(objectTy: NimNode): bool =
+  if objectTy[1].kind != nnkOfInherit:
+    return false
+
+  let parent = objectTy[1][0]
+  eqIdent(parent, "Expression") or
+  eqIdent(parent, "Statement")
+
+macro constructors*(body: untyped): untyped =
+  result = newStmtList()
+  result.add body
+  for section in body:
+    if section.kind != nnkTypeSection:
+      continue
+
+    for typeDef in section:
+      if typeDef.kind != nnkTypeDef:
+        continue
+
+      let nameNode = typeDef[0]
+      let refNode = typeDef[2]
+
+      if refNode.kind != nnkRefTy:
+        continue
+
+      let objectTy = refNode[0]
+
+      if objectTy.kind != nnkObjectTy:
+        continue
+
+      if objectTy[1].kind != nnkOfInherit:
+        continue
+      if not isAstNode(objectTy):
+        continue
+
+      let pragmas = getPragmas(nameNode)
+      var kindValue: NimNode = nil
+
+      if pragmas.kind == nnkPragma:
+        for p in pragmas:
+          if p.kind == nnkExprColonExpr and
+             eqIdent(p[0], "onnimnode"):
+            kindValue = p[1]
+            break
+
+      if kindValue.isNil:
+        error(
+          "Missing {.onnimnode: ... .}",
+          typeDef
+        )
+
+      result.add makeConstructor(
+        getTypeName(nameNode),
+        kindValue,
+        objectTy
+      )
+
+type
+  FuncArg* = ref object
+    argType*: Type
+    argToken*: Token
+    mutable*: bool
+
+proc add*(arguments: var seq[FuncArg], argType: Type, argToken: Token) =
+  arguments.add(FuncArg(argType: argType, argToken: argToken))
+
+constructors: 
+  type
+    NodeKind* = enum
+      exprInvalid, exprNumber, exprUnary, exprBinary, exprBool, exprIdent,
+      exprCall, exprDeref
+
+      stmtInvalid, stmtBlock, stmtDeclaration, stmtAssignment, stmtBranching
+      stmtWhile, stmtContinue, stmtBreak, stmtFunc, stmtReturn, stmtCall
+      stmtRegion
+
+    Expression* = ref object of RootObj
+      kind*: NodeKind
+      token*: Token
+      exprType*: Type
+
+    InvalidExpression* {.onnimnode: exprInvalid.} = ref object of Expression
+
+    NumberExpression* {.onnimnode: exprNumber.} = ref object of Expression
+      ## <number>
+      ## number = token
+
+    UnaryExpression* {.onnimnode: exprUnary.} = ref object of Expression
+      ## <op> <value>
+      ## op = token
+      value*: Expression
+
+    BinaryExpression* {.onnimnode: exprBinary.} = ref object of Expression
+      ## <left> <op> <right>
+      ## op = token
+      left*: Expression
+      right*: Expression
+
+    BoolExpression* {.onnimnode: exprBool.} = ref object of Expression
+      ## <bool>
+      ## bool = token
+
+    IdentExpression* {.onnimnode: exprIdent.} = ref object of Expression
+      ## <ident>
+      ## ident = token
+    
+    CallExpression* {.onnimnode: exprCall.} = ref object of Expression
+      ## <value> ( [<args>]* )
+      ## "(" = token
+      value*: Expression
+      args*: seq[Expression]
+
+    DerefExpression* {.onnimnode: exprDeref.} = ref object of Expression
+      ## <value> ^
+      ## "^" = token
+      value*: Expression
+
+    Statement* = ref object of RootObj
+      kind*: NodeKind
+      token*: Token
+
+    InvalidStatement* {.onnimnode: stmtInvalid.} = ref object of Statement
+
+    BlockStatement* {.onnimnode: stmtBlock.} = ref object of Statement
+      ## do [<stmt>]* <endToken>
+      ## endToken = token
+      statements*: seq[Statement]
+
+    DeclarationStatement* {.onnimnode: stmtDeclaration.} = ref object of Statement
+      ## <valueType> <name> "=" <value>
+      ## "=" = token
+      valueType*: Type
+      name*: Token
+      value*: Expression
+      mutable*: bool
+
+    AssignmentStatement* {.onnimnode: stmtAssignment.} = ref object of Statement
+      ## <left> = <right>
+      ## "=" = token
+      left*: Expression
+      right*: Expression
+
+    BranchingStatement* {.onnimnode: stmtBranching.} = ref object of Statement
+      ## if <cond> <block> [elif <cond> <block>]* [else <block>]
+      ## if = token
+      condition*: Expression
+      ifBlock*: BlockStatement
+      elifBranches*: seq[tuple[cond: Expression, elifBlock: BlockStatement]]
+      elseBlock*: BlockStatement
+
+    WhileStatement* {.onnimnode: stmtWhile.} = ref object of Statement
+      ## while <cond> <block>
+      ## while = token
+      condition*: Expression
+      whileBlock*: BlockStatement
+
+    ContinueStatement* {.onnimnode: stmtContinue.} = ref object of Statement
+      ## continue
+      ## continue = token
+
+    BreakStatement* {.onnimnode: stmtBreak.} = ref object of Statement
+      ## break
+      ## break = token
+
+    FuncStatement* {.onnimnode: stmtFunc.} = ref object of Statement
+      ## func [type] <name> ( [<args>]* ) <block>
+      ## func = token
+      returnType*: Type
+      name*: Token
+      args*: seq[FuncArg]
+      funcBlock*: BlockStatement
+
+    ReturnStatement* {.onnimnode: stmtReturn.} = ref object of Statement
+      ## return [value]
+      ## return = token
+      value*: Expression
+
+    CallStatement* {.onnimnode: stmtCall.} = ref object of Statement
+      ## <expr>
+      ## "(" = token
+      expr*: CallExpression
+
+    RegionStatement* {.onnimnode: stmtRegion.} = ref object of Statement
+      ## region <name> <block>
+      ## region = token
+      name*: Token
+      regionBlock*: BlockStatement
+=== Файл: ./src/core/types.nim ===
+import std/[strutils]
+import tokens
+
+type
+  TypeKind* = enum
+    typeUndefined
+
+    typeInt
+
+    typeBool
+
+    typeFunc
+    typePtr
+
+    typeRegion
+
+  Type* = ref object
+    case kind*: TypeKind
+    of typeFunc:
+      argTypes*: seq[Type]
+      returnType*: Type
+    of typePtr:
+      ptrBase*: Type
+      ptrRegion*: Type
+    of typeRegion:
+      regionName*: Token
+    else: discard
+
+let
+  undefinedType* = Type(kind: typeUndefined)
+  int64Type* = Type(kind: typeInt)
+  boolType* = Type(kind: typeBool)
+var
+  funcTypes*: seq[Type]
+  ptrTypes*: seq[Type]
+  regionTypes*: seq[Type]
+
+proc eq*(a: Type, b: Type): bool =
+  if a == nil or b == nil: return false
+  if a.kind != b.kind: return false
+
+  if a.kind == typeFunc:
+    if a.argTypes.len != b.argTypes.len: return false
+
+    for i in 0..<a.argTypes.len:
+      if not eq(a.argTypes[i], b.argTypes[i]): return false
+
+    return eq(a.returnType, b.returnType)
+
+  if a.kind == typePtr:
+    return eq(a.ptrBase, b.ptrBase) and eq(a.ptrRegion, b.ptrRegion)
+
+  if a.kind == typeRegion:
+    return a.regionName == b.regionName
+
+  return true
+
+proc eq*(a: Type, b: TypeKind): bool {.inline.} =
+  if a == nil: return false
+  a.kind == b
+
+proc eq*(a: TypeKind, b: Type): bool {.inline.} =
+  if b == nil: return false
+  a == b.kind
+
+proc eq*(a: TypeKind, b: TypeKind): bool {.inline.} =
+  a == b
+
+proc neq*(a: Type | TypeKind, b: Type | TypeKind): bool {.inline.} =
+  not eq(a, b)
+
+proc getFuncType*(argTypes: seq[Type], returnType: Type): Type =
+  for funcType in funcTypes:
+    if funcType.argTypes == argTypes and eq(funcType.returnType, returnType):
+      return funcType
+  
+  result = Type(kind: typeFunc, argTypes: argTypes, returnType: returnType)
+  funcTypes.add(result)
+
+proc getPtrType*(baseType: Type, region: Type): Type =
+  for ptrType in ptrTypes:
+    if eq(ptrType.ptrBase, baseType) and eq(ptrType.ptrRegion, region):
+      return ptrType
+  
+  result = Type(kind: typePtr, ptrBase: baseType, ptrRegion: region)
+  ptrTypes.add(result)
+
+proc getRegionType*(name: Token): Type =
+  for regionType in regionTypes:
+    if regionType.regionName.lexeme == name.lexeme:
+      return regionType
+  
+  result = Type(kind: typeRegion, regionName: name)
+  regionTypes.add(result)
+
+proc `$`*(k: TypeKind): string =
+  case k
+  of typeUndefined: "undefined"
+  of typeInt:       "int"
+
+  of typeBool:      "bool"
+  of typeFunc:      "T(T, ...)"
+  of typePtr:       "T*"
+
+  of typeRegion:    "region"
+
+proc `$`*(t: Type): string =
+  if t == nil: return "nilType"
+  case t.kind
+  of typeFunc:
+    var args: seq[string]
+    for arg in t.argTypes:
+      args.add($arg)
+    return (if t.returnType.neq typeUndefined: $t.returnType else: "_") & "(" & args.join(", ") & ")"
+  of typePtr:
+    return $t.ptrBase & "^" & $t.ptrRegion.regionName.lexeme
+  of typeRegion:
+    return "region '" & $t.regionName.lexeme & "'"
+  else: return $t.kind
+=== Файл: ./src/core/parser.nim ===
+import lexer, tokens, errors, ast, types
+
+type Parser* = object
+  file: string
+  lexer: Lexer
+
+proc newParser*(text, file: string): Parser =
+  Parser(file: file, lexer: newLexer(text, file))
+
+proc newError(self: var Parser,
+  kind: ErrorKind, token: Token, 
+  args: varargs[string, `$`]) =
+  if not self.lexer.wasError:
+    newError(kind, token, args)
+
+  let currentLine = token.line
+  while self.lexer.peekToken().line == currentLine and self.lexer.peekToken().kind != tkEOF:
+    discard self.lexer.nextToken()
+
+proc nextToken(self: var Parser): Token {.inline.} = self.lexer.nextToken()
+proc peekToken(self: var Parser): Token {.inline.} = self.lexer.peekToken()
+proc skipToken(self: var Parser) {.inline.} = discard self.lexer.nextToken()
+
+proc expectToken(self: var Parser, expected: TokenKind): Token =
+  let token = self.nextToken()
+  if token.kind != expected:
+    self.newError(errExpectedSyntax, token, expected.mean, token.mean)
+    return token.copy(kind = tkInvalid)
+  return token
+
+proc isExpression(self: Parser, token: Token): bool =
+  token.kind in {tkLParen, tkNumber, tkTrue, tkFalse, tkIdent, tkBang, tkMinus, tkPlus}
+
+proc isType(self: Parser, token: Token): bool =
+  token.kind in {tkInt64, tkBool, tkUnder}
+
+proc parseType(self: var Parser, token: Token): Type =
+  case token.kind:
+  of tkInt64: result = int64Type
+  of tkBool: result = boolType
+  of tkUnder: result = undefinedType
+  else:
+    newError(errType, token, token.mean)
+    result = undefinedType
+
+  while self.peekToken().kind in {tkLParen, tkCaret}:
+    let tok = self.nextToken()
+
+    if tok.kind == tkLParen:
+      var argTypes: seq[Type]
+
+      while self.peekToken().kind != tkRParen:
+        argTypes.add(self.parseType(self.nextToken()))
+
+        if self.peekToken().kind == tkRParen: break
+        discard self.expectToken(tkComma)
+
+      discard self.expectToken(tkRParen)
+      result = getFuncType(argTypes, result)
+
+    elif tok.kind == tkCaret:
+      var region = self.nextToken()
+      if region.kind notin {tkRegion, tkIdent}:
+        newError(errExpectedSyntax, region, tkRegion.mean & " | " & tkIdent.mean, region.kind.mean)
+      result = getPtrType(result, getRegionType(region))
+
+proc parseExpression(self: var Parser): Expression
+
+proc parsePrimary(self: var Parser): Expression =
+  let token = self.nextToken()
+
+  if token.kind == tkLParen:
+    result = self.parseExpression()
+    discard self.expectToken(tkRParen)
+    return result
+
+  elif token.kind == tkNumber:
+    return newNumberExpression(token)
+
+  elif token.kind in {tkTrue, tkFalse}:
+    return newBoolExpression(token)
+
+  elif token.kind in {tkIdent, tkRegion}:
+    return newIdentExpression(token)
+
+  self.newError(errExpression, token, token.mean)
+  return newInvalidExpression(token)
+
+proc parsePrefix(self: var Parser): Expression =
+  let token = self.peekToken()
+  if token.kind in {tkPlus, tkMinus, tkBang}:
+    self.skipToken()
+    return newUnaryExpression(token, self.parsePrefix())
+
+  return self.parsePrimary()
+
+proc parsePostfix(self: var Parser): Expression =
+  result = self.parsePrefix()
+
+  while (let token = self.peekToken(); token.kind in {tkLParen, tkCaret}):
+    if token.kind == tkLParen:
+      self.skipToken()
+
+      var args: seq[Expression]
+
+      while self.peekToken().kind != tkRParen:
+        args.add(self.parseExpression())
+
+        if self.peekToken().kind == tkRParen: break
+        discard self.expectToken(tkComma)
+
+      discard self.expectToken(tkRParen)
+      result = newCallExpression(token, result, args)
+
+    elif token.kind == tkCaret:
+      self.skipToken()
+      result = newDerefExpression(token, result)
+
+proc parseMulDiv(self: var Parser): Expression =
+  result = self.parsePostfix()
+
+  while self.peekToken().kind in {tkStar, tkSlash, tkPercent}:
+    let op = self.nextToken()
+    let right = self.parsePostfix()
+    result = newBinaryExpression(op, result, right)
+
+proc parseAddSub(self: var Parser): Expression =
+  result = self.parseMulDiv()
+
+  while self.peekToken().kind in {tkPlus, tkMinus}:
+    let op = self.nextToken()
+    let right = self.parseMulDiv()
+    result = newBinaryExpression(op, result, right)
+
+proc parseComparison(self: var Parser): Expression =
+  result = self.parseAddSub()
+
+  while self.lexer.peekToken().kind in {tkGT, tkLT, tkGTE, tkLTE, tkEqualsEquals, tkBangEquals}:
+    let op = self.lexer.nextToken()
+    let right = self.parseAddSub()
+    result = newBinaryExpression(op, result, right)
+
+proc parseAnd(self: var Parser): Expression =
+  result = self.parseComparison()
+
+  while self.lexer.peekToken().kind == tkAnd:
+    let op = self.lexer.nextToken()
+    let right = self.parseComparison()
+    result = newBinaryExpression(op, result, right)
+
+proc parseOr(self: var Parser): Expression =
+  result = self.parseAnd()
+
+  while self.lexer.peekToken().kind == tkOr:
+    let op = self.lexer.nextToken()
+    let right = self.parseAnd()
+    result = newBinaryExpression(op, result, right)
+
+proc parseAt(self: var Parser): Expression =
+  result = self.parseOr()
+
+  while self.lexer.peekToken().kind == tkAt:
+    let op = self.lexer.nextToken()
+    let right = self.parseOr()
+    result = newBinaryExpression(op, result, right)
+
+proc parseExpression(self: var Parser): Expression =
+  return self.parseAt()
+
+proc parseStatement(self: var Parser): Statement
+
+proc parseDeclaration(self: var Parser): Statement =
+  let valueType = self.parseType(self.nextToken())
+  let name = self.expectToken(tkIdent)
+  let token = self.expectToken(tkEquals)
+  let value = self.parseExpression()
+
+  return newDeclarationStatement(token, valueType, name, value)
+
+proc parseBlock(self: var Parser, endKinds: varargs[TokenKind], consume: bool = true): BlockStatement =
+  discard self.expectToken(tkDo)
+
+  var stmts: seq[Statement]
+  
+  while self.peekToken().kind notin endKinds and self.peekToken().kind != tkEOF:
+    stmts.add(self.parseStatement())
+  
+  let endToken = if consume:
+    self.nextToken()
+  else:
+    self.peekToken()
+  
+  result = newBlockStatement(endToken, stmts)
+
+proc parseBranching(self: var Parser): Statement =
+  let token = self.nextToken()
+
+  let cond = self.parseExpression()
+  let ifBlock = self.parseBlock(tkEnd, tkElif, tkElse, consume=false)
+
+  var elifBranches: seq[tuple[cond: Expression, elifBlock: BlockStatement]]
+  while self.peekToken().kind == tkElif:
+    self.skipToken()
+
+    elifBranches.add((
+      cond: self.parseExpression(), 
+      elifBlock: self.parseBlock(tkEnd, tkElif, tkElse, consume=false)
+    ))
+
+  var elseBlock: BlockStatement = nil
+  if self.peekToken().kind == tkElse:
+    self.skipToken()
+    elseBlock = self.parseBlock(tkEnd, consume=false)
+
+  discard self.expectToken(tkEnd)
+
+  return newBranchingStatement(token, cond, ifBlock, elifBranches, elseBlock)
+
+proc parseWhile(self: var Parser): Statement =
+  let token = self.nextToken()
+  
+  let cond = self.parseExpression()
+  let whileBlock = self.parseBlock(tkEnd)
+  
+  return newWhileStatement(token, cond, whileBlock)
+
+proc parseFunc(self: var Parser): Statement =
+  let token = self.nextToken()
+
+  var funcType = undefinedType
+
+  if self.isType(self.peekToken()):
+    funcType = self.parseType(self.nextToken())
+
+  let name = self.expectToken(tkIdent)
+
+  discard self.expectToken(tkLParen)
+
+  var args: seq[FuncArg]
+
+  while self.peekToken().kind != tkRParen:
+    args.add(self.parseType(self.nextToken()), self.expectToken(tkIdent))
+
+    if self.peekToken().kind == tkRParen: break
+    discard self.expectToken(tkComma)
+
+  discard self.expectToken(tkRParen)
+
+  let funcBlock = self.parseBlock(tkEnd)
+
+  return newFuncStatement(token, funcType, name, args, funcBlock)
+
+proc parseReturn(self: var Parser): Statement =
+  let token = self.nextToken()
+  var expression: Expression = nil
+
+  if self.isExpression(self.peekToken()):
+    expression = self.parseExpression()
+
+  return newReturnStatement(token, expression)
+
+proc parseRegion(self: var Parser): Statement =
+  let token = self.nextToken()
+  let name = self.expectToken(tkIdent)
+  let regionBlock = self.parseBlock(tkEnd)
+
+  return newRegionStatement(token, name, regionBlock)
+
+proc parseStatement(self: var Parser): Statement =
+  let token = self.lexer.peekToken()
+
+  if self.isType(token):
+    return self.parseDeclaration()
+
+  elif token.kind == tkIf:
+    return self.parseBranching()
+
+  elif token.kind == tkWhile:
+    return self.parseWhile()
+
+  elif token.kind == tkContinue:
+    return newContinueStatement(self.nextToken())
+
+  elif token.kind == tkBreak:
+    return newBreakStatement(self.nextToken())
+
+  elif token.kind == tkFunc:
+    return self.parseFunc()
+
+  elif token.kind == tkReturn:
+    return self.parseReturn()
+
+  elif token.kind == tkRegion:
+    return self.parseRegion()
+
+  elif self.isExpression(token):
+    let expr = self.parseExpression()
+
+    if expr.kind in {exprIdent, exprDeref} and self.peekToken().kind == tkEquals:
+      return newAssignmentStatement(self.nextToken(), expr, self.parseExpression())
+
+    elif expr.kind == exprCall:
+      return newCallStatement(expr.token, CallExpression(expr))
+
+  self.newError(errStatement, token, token.mean())
+  return newInvalidStatement(token)
+
+proc parse*(self: var Parser): BlockStatement =
+  var statements: seq[Statement]
+
+  while true:
+    statements.add(self.parseStatement())
+    if self.lexer.peekToken().kind == tkEOF:
+      break
+
+  return newBlockStatement(self.peekToken(), statements)
+=== Файл: ./src/core/errors.nim ===
+import tokens
+
+type
+  ErrorKind* = enum
+    errSyntaxChar, errSyntaxParenthesis
+
+    errExpectedSyntax, errExpression, errStatement, errType
+
+    errUnaryTypeMismatch, errBinaryTypeMismatch, errDeclarationTypeMismatch, errTypeMismatch
+    errRedeclaration, errUndeclaredSymbol
+
+    errControlFlowOutsideLoop
+
+    errReturnOutsideFunc, errReturnValue, errReturnTypeMismatch
+    errCallNonFunc, errCallArgCount, errCallArgType, errMissingReturn
+
+    errReturnInsideRegion
+
+  Error* = ref object
+    kind*: ErrorKind
+    file*: string
+    line*: Positive
+    col*: Positive
+    len*: Positive
+    args*: seq[string]
+    message*: string
+
+var errors*: seq[Error]
+
+proc message(kind: ErrorKind): string =
+  case kind:
+  of errSyntaxChar:        "Unknown character: '@0'"
+  of errSyntaxParenthesis: "@0 parenthesis"
+
+  of errExpectedSyntax: "Expected @0, got @1"
+  of errExpression:     "Invalid expression: @0"
+  of errStatement:      "Invalid statement: @0"
+  of errType:           "Invalid type: @0"
+
+  of errUnaryTypeMismatch:       "Type mismatch for the unary operator @0: @1"
+  of errBinaryTypeMismatch:      "Type mismatch for the binary operator @0: @1 @0 @2"
+  of errDeclarationTypeMismatch: "Expected @0 for @1, got @2"
+  of errTypeMismatch:            "Expected @0, got @1"
+  of errRedeclaration:           "Redeclaration symbol '@0', originally declared in @1(@2:@3)"
+  of errUndeclaredSymbol:        "Undeclared symbol '@0'"
+
+  of errControlFlowOutsideLoop:  "'@0' statement outside of loop"
+
+  of errReturnOutsideFunc:       "Return statement outside of function"
+  of errReturnValue:             "Function should not return anything"
+  of errReturnTypeMismatch:      "Function returns @0, got @1"
+  of errCallNonFunc:             "Cannot call non-function value of type '@0'"
+  of errCallArgCount:            "Expected @0 arguments, got @1"
+  of errCallArgType:             "Expected argument of type @0, got @1"
+  of errMissingReturn:           "Function '@0' does not return a value on all paths"
+
+  of errReturnInsideRegion:      "Return statement is not allowed inside region"
+
+proc newError*(kind: ErrorKind, file: string, line, col: Positive, len: Positive, args: varargs[string, `$`]) {.inline.} =
+  errors.add(Error(
+    kind: kind,
+    file: file,
+    line: line,
+    col: col,
+    len: len,
+    args: @args,
+    message: kind.message
+  ))
+
+proc newError*(kind: ErrorKind, token: Token, args: varargs[string, `$`]) {.inline.} =
+  errors.add(Error(
+    kind: kind,
+    file: token.file,
+    line: token.line,
+    col: token.col,
+    len: token.len,
+    args: @args,
+    message: kind.message
+  ))
+=== Файл: ./src/core/lexer.nim ===
+import tokens, errors
+import std/tables
+
+type 
+  Lexer* = object
+    text: string
+    file: string
+    len: Natural
+    line: Positive = 1
+    col: Positive = 1
+    pos: Natural = 0
+
+    wasError*: bool = false
+
+    parenthesisStack: seq[Token]
+
+    peekedToken*: Token
+    hasPeeked*: bool = false
+
+proc newLexer*(text: string, file: string): Lexer =
+  result = Lexer(text: text, file: file, len: text.len)
+
+proc peek(self: var Lexer): char =
+  if self.pos < self.len: return self.text[self.pos]
+  return '\0'
+
+proc isDigit(c: char): bool =
+  c in '0'..'9'
+
+proc isAlpha(c: char): bool =
+  c in 'a'..'z' or c in 'A'..'Z'
+
+proc isAlphaNumeric(c: char): bool =
+  c.isAlpha() or c.isDigit()
+
+proc advance(self: var Lexer) =
+  if self.pos < self.len and self.text[self.pos] == '\n':
+    self.line.inc()
+    self.col = 1
+  else:
+    self.col.inc()
+  self.pos.inc()
+
+proc nextToken*(self: var Lexer): Token =
+  if self.hasPeeked:
+    self.hasPeeked = false
+    return self.peekedToken
+
+  var c = self.peek()
+
+  while c in " \t\r\n":
+    self.advance()
+    c = self.peek()
+
+  if c == '\0': 
+    if self.parenthesisStack.len > 0:
+      self.wasError = true
+      let last = self.parenthesisStack[^1]
+      newError(errSyntaxParenthesis, last.file, last.line, last.col, 1, "Unclosed")
+    return newToken(tkEOF, "\0", self.file, self.line, self.col, 1)
+
+  if c.isDigit():
+    var startCol = self.col
+    var startLine = self.line
+    var lexeme = ""
+    
+    while self.peek().isDigit():
+      lexeme &= $self.peek()
+      self.advance()
+    
+    result = newToken(tkNumber, lexeme, self.file, startLine, startCol, lexeme.len)
+
+  elif $c in operatorTable:
+    var op = $c
+    let startCol = self.col
+    let startLine = self.line
+    
+    self.advance()
+    var next = self.peek()
+    
+    while ($(op & next)) in operatorTable:
+      op &= next
+      self.advance()
+      next = self.peek()
+    
+    result = newToken(operatorTable[op], op, self.file, startLine, startCol, op.len)
+    
+    if result.kind in parenthesisTable:
+      self.parenthesisStack.add(result)
+    elif result.kind in rightParenthesis:
+      if self.parenthesisStack.len == 0 or parenthesisTable[self.parenthesisStack[^1].kind] != result.kind:
+        self.wasError = true
+        newError(errSyntaxParenthesis, self.file, startLine, startCol, 1, "Unexpected")
+      else:
+        discard self.parenthesisStack.pop()
+
+  elif c.isAlpha() or c == '_':
+    var startCol = self.col
+    var startLine = self.line
+    var lexeme = ""
+    
+    while self.peek().isAlphaNumeric() or self.peek() == '_':
+      lexeme &= $self.peek()
+      self.advance()
+    
+    if lexeme in keywordTable:
+      result = newToken(keywordTable[lexeme], lexeme, self.file, startLine, startCol, lexeme.len)
+    else:
+      result = newToken(tkIdent, lexeme, self.file, startLine, startCol, lexeme.len)
+
+  else:
+    self.wasError = true
+    result = newToken(tkInvalid, $c, self.file, self.line, self.col, 1)
+    newError(errSyntaxChar, result, c)
+    self.advance()
+
+proc peekToken*(self: var Lexer): Token =
+  if not self.hasPeeked:
+    self.peekedToken = self.nextToken()
+    self.hasPeeked = true
+  result = self.peekedToken
+=== Файл: ./src/core/tokens.nim ===
+import std/tables
+
+type
+  TokenKind* = enum
+    tkNumber
+    tkIdent
+
+    tkPlus, tkMinus, tkStar, tkSlash, tkPercent
+    tkGT, tkLT, tkGTE, tkLTE, tkEqualsEquals, tkBangEquals
+    tkEquals, tkBang, tkComma, tkAt, tkCaret
+
+    tkLParen, tkRParen
+
+    tkInt64, tkBool, tkUnder
+
+    tkAnd, tkOr, tkTrue, tkFalse
+    tkIf, tkElif, tkElse, tkDo, tkEnd
+    tkWhile, tkContinue, tkBreak
+    tkFunc, tkReturn
+    tkRegion
+
+    tkEOF
+    tkInvalid
+
+  Token* = object
+    kind*: TokenKind
+    lexeme*: string
+    file*: string
+    line*: Positive = 1
+    col*: Positive = 1
+    len*: Natural
+
+func newToken*(
+    kind: TokenKind, lexeme: string, file: string, 
+    line: Positive, col: Positive, len: Natural): Token =
+  Token(kind: kind, lexeme: lexeme, file: file, line: line, col: col, len: len)
+
+const operatorTable* = {
+
+  "+": tkPlus,
+  "-": tkMinus,
+  "*": tkStar,
+  "/": tkSlash,
+  "%": tkPercent,
+
+  ">": tkGT,
+  "<": tkLT,
+  ">=": tkGTE,
+  "<=": tkLTE,
+  "==": tkEqualsEquals,
+  "!=": tkBangEquals,
+
+  "!": tkBang,
+  "=": tkEquals,
+  ",": tkComma,
+  "@": tkAt,
+  "^": tkCaret,
+
+  "(": tkLParen,
+  ")": tkRParen
+
+}.toTable
+
+const parenthesisTable* = {
+
+  tkLParen: tkRParen
+
+}.toTable
+const rightParenthesis* = block:
+  var res: seq[TokenKind] = @[]
+  for v in values(parenthesisTable):
+    res.add(v)
+  res
+
+const keywordTable* = {
+
+  "int": tkInt64,
+  "int64": tkInt64,
+  "bool": tkBool,
+  "_": tkUnder,
+
+  "true": tkTrue,
+  "false": tkFalse,
+  "and": tkAnd,
+  "or": tkOr,
+
+  "if": tkIf,
+  "elif": tkElif,
+  "else": tkElse,
+  "do": tkDo,
+  "end": tkEnd,
+
+  "while": tkWhile,
+  "continue": tkContinue,
+  "break": tkBreak,
+
+  "func": tkFunc,
+  "return": tkReturn,
+
+  "region": tkRegion
+  
+}.toTable
+
+func copy*(token: Token, kind: TokenKind = token.kind, lexeme: string = token.lexeme,
+           file: string = token.file, line: Positive = token.line,
+           col: Positive = token.col, len: Natural = token.len): Token =
+  Token(kind: kind, lexeme: lexeme, file: file, line: line, col: col, len: len)
+
+proc mean*(kind: TokenKind): string =
+  case kind:
+  of tkNumber:        return "number"
+  of tkIdent:         return "identifier"
+  
+  of tkPlus:          return "plus operator '+'"
+  of tkMinus:         return "minus operator '-'"
+  of tkStar:          return "star operator '*'"
+  of tkSlash:         return "slash operator '/'"
+  of tkPercent:       return "percent operator '%'"
+  
+  of tkGT:            return "greater than operator '>'"
+  of tkLT:            return "less than operator '<'"
+  of tkGTE:           return "greater or equal operator '>='"
+  of tkLTE:           return "less or equal operator '<='"
+  of tkEqualsEquals:  return "equal operator '=='"
+  of tkBangEquals:    return "not equal operator '!='"
+  of tkBang:          return "not operator '!'"
+  of tkEquals:        return "assign operator '='"
+  of tkComma:         return "comma operator ','"
+  of tkAt:            return "at operator '@'"
+  of tkCaret:         return "caret operator '^'"
+  
+  of tkLParen:        return "left parenthesis '('"
+  of tkRParen:        return "right parenthesis ')'"
+
+  of tkInt64:         return "type 'int64'"
+  of tkBool:          return "type 'bool'"
+
+  of tkUnder:         return "under operator '_'"
+  
+  of tkAnd:           return "keyword 'and'"
+  of tkOr:            return "keyword 'or'"
+  of tkTrue:          return "keyword 'true'"
+  of tkFalse:         return "keyword 'false'"
+
+  of tkIf:            return "keyword 'if'"
+  of tkElif:          return "keyword 'elif'"
+  of tkElse:          return "keyword 'else'"
+  of tkDo:            return "keyword 'do'"
+  of tkEnd:           return "keyword 'end'"
+
+  of tkWhile:         return "keyword 'while'"
+  of tkContinue:      return "keyword 'continue'"
+  of tkBreak:         return "keyword 'break'"
+
+  of tkFunc:          return "keyword 'func'"
+  of tkReturn:        return "keyword 'return'"
+
+  of tkRegion:        return "keyword 'region'"
+  
+  of tkInvalid:       return "invalid token"
+  of tkEOF:           return "end of file"
+
+proc mean*(token: Token): string =
+  mean(token.kind)
