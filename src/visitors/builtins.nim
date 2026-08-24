@@ -33,6 +33,6 @@ macro generateBuiltins*(body: untyped): untyped =
       `resultString`
 
 generateBuiltins:
-  Int    = "type $# = int"
-  Number = "type $# = int"
-  Bool   = "type $# = bool"
+  Int    = "type $#* = int"
+  Number = "type $#* = int"
+  Bool   = "type $#* = bool"

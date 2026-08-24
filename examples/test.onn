@@ -1,1 +1,8 @@
 Int x = 10
+Bool f = false
+
+if x > 5 do
+  f = true
+else do
+  x = 5
+end

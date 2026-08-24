@@ -35,7 +35,7 @@ proc main() =
     checkSemantics(code)
 
     if errors.errors.len != 0: break errorProne
-    let code = generateCode(code)
+    let code = generateCode(code, getAppFilename().absolutePath().parentDir().parentDir() / "src" / "std")
 
     if errors.errors.len != 0: break errorProne
     

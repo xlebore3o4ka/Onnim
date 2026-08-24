@@ -38,6 +38,8 @@ proc nimtype(t: Type): string =
     return fmt"uint #[ptr {nimtype(t.ptrBase)}]#"
   of typeBase:
     return "`" & t.name & "`"
+  of typeType:
+    return nimtype(t.baseType)
   else: 
     echo "Unhandled type: ", t 
     quit(1)
@@ -68,7 +70,7 @@ proc visitBinaryExpression(ctx: Context, node: BinaryExpression): string =
   return fmt"{ctx.visit(node.left)} {op} {ctx.visit(node.right)}"
 
 proc visitIdentExpression(ctx: Context, node: IdentExpression): string =
-  return node.token.lexeme
+  return ident(node.token.lexeme)
 
 proc visitCallExpression(ctx: Context, node: CallExpression): string =
   let fn = ctx.visit(node.value)
@@ -97,7 +99,7 @@ proc visitBlockStatement(ctx: Context, node: BlockStatement): string =
 
 proc visitDeclarationStatement(ctx: Context, node: DeclarationStatement): string =
   let keyword = if node.mutable: "var" else: "let"
-  result = fmt"{keyword} {node.name.lexeme}: {nimtype(node.valueType)} = {ctx.visit(node.value)}"
+  result = fmt"{keyword} {ident(node.name.lexeme)}: {nimtype(node.valueType)} = {ctx.visit(node.value)}"
 
 proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement): string =
   result = fmt"{ctx.visit(node.left)} = {ctx.visit(node.right)}"
@@ -119,11 +121,11 @@ proc visitBreakStatement(ctx: Context, node: BreakStatement): string =
   result = "break"
 
 proc visitFuncStatement(ctx: Context, node: FuncStatement): string =
-  result = fmt"proc {node.name.lexeme}("
+  result = fmt"proc {ident(node.name.lexeme)}("
   for i, arg in node.args:
     if i != 0: result &= ", "
     let varPrefix = if arg.mutable: "var " else: ""
-    result &= fmt"{arg.argToken.lexeme}: {varPrefix}{nimtype(arg.argType)}"
+    result &= fmt"{ident(arg.argToken.lexeme)}: {varPrefix}{nimtype(arg.argType)}"
   result &= ")"
   if node.returnType.neq(unsetType):
     result &= fmt": {nimtype(node.returnType)}"
@@ -166,17 +168,15 @@ proc visit(ctx: Context, node: Statement): string =
   of stmtRegion: return visitRegionStatement(ctx, RegionStatement(node))
   else: discard
 
-proc generateCode*(node: Statement): string =
+proc generateCode*(node: Statement, stdpath: string): string =
   var ctx = Context()
-  result = &"""import {currentSourcePath().absolutePath()}/src/std/[system]
+
+  let builtinsPath = stdpath / "builtins.nim"
+  writeFile(builtinsPath, generateBuiltins())
+  
+  result = &"""import {stdpath}/[system, builtins]
 
 var s_region = onnim_system_newArena()  # DEPRECATED
-
-"""
-
-  result &= generateBuiltins()
-
-  result &= """
 
 block transpiled:""" & ctx.visit(node) & "\n"
   ctx.indent.inc
