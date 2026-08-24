@@ -17,20 +17,23 @@ type
     peekedToken*: Token
     hasPeeked*: bool = false
 
-proc newLexer*(text: string, file: string): Lexer =
+proc newLexer*(text: string, file: string): Lexer {.inline.} =
   result = Lexer(text: text, file: file, len: text.len)
 
-proc peek(self: var Lexer): char =
+proc peek(self: var Lexer): char {.inline.} =
   if self.pos < self.len: return self.text[self.pos]
   return '\0'
 
-proc isDigit(c: char): bool =
+proc isDigit(c: char): bool {.inline.} =
   c in '0'..'9'
 
-proc isAlpha(c: char): bool =
+proc isAlpha(c: char): bool {.inline.} =
   c in 'a'..'z' or c in 'A'..'Z'
 
-proc isAlphaNumeric(c: char): bool =
+proc isCapital(c: char): bool {.inline.} =
+  c in 'A'..'Z'
+
+proc isAlphaNumeric(c: char): bool {.inline.} =
   c.isAlpha() or c.isDigit()
 
 proc advance(self: var Lexer) =
@@ -103,7 +106,9 @@ proc nextToken*(self: var Lexer): Token =
       lexeme &= $self.peek()
       self.advance()
     
-    if lexeme in keywordTable:
+    if lexeme[0].isCapital():
+      result = newToken(tkType, lexeme, self.file, startLine, startCol, lexeme.len)
+    elif lexeme in keywordTable:
       result = newToken(keywordTable[lexeme], lexeme, self.file, startLine, startCol, lexeme.len)
     else:
       result = newToken(tkIdent, lexeme, self.file, startLine, startCol, lexeme.len)

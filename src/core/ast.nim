@@ -58,7 +58,7 @@ proc makeConstructor(typeName, kindValue, objectTy: NimNode): NimNode =
       ident("exprType"),
       ident("Type"),
       quote do:
-        types.undefinedType
+        types.unsetType
     )
 
     body.add quote do:
@@ -140,7 +140,7 @@ constructors:
   type
     NodeKind* = enum
       exprInvalid, exprNumber, exprUnary, exprBinary, exprBool, exprIdent,
-      exprCall, exprDeref
+      exprCall, exprDeref, exprKindType
 
       stmtInvalid, stmtBlock, stmtDeclaration, stmtAssignment, stmtBranching
       stmtWhile, stmtContinue, stmtBreak, stmtFunc, stmtReturn, stmtCall
@@ -187,6 +187,11 @@ constructors:
       ## <value> ^
       ## "^" = token
       value*: Expression
+
+    TypeExpression* {.onnimnode: exprKindType.} = ref object of Expression
+      ## <type>
+      ## type = token
+      ## exprType has typeType
 
     Statement* = ref object of RootObj
       kind*: NodeKind
@@ -235,7 +240,7 @@ constructors:
       ## break
       ## break = token
 
-    FuncStatement* {.onnimnode: stmtFunc.} = ref object of Statement
+    FuncStatement* {.onnimnode: stmtFunc, deprecated.} = ref object of Statement
       ## func [type] <name> ( [<args>]* ) <block>
       ## func = token
       returnType*: Type
@@ -253,7 +258,7 @@ constructors:
       ## "(" = token
       expr*: CallExpression
 
-    RegionStatement* {.onnimnode: stmtRegion.} = ref object of Statement
+    RegionStatement* {.onnimnode: stmtRegion, deprecated.} = ref object of Statement
       ## region <name> <block>
       ## region = token
       name*: Token

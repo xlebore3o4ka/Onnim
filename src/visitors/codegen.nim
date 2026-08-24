@@ -1,6 +1,6 @@
 import ../core/[ast, types, tokens]
 import std/[strformat, sequtils, strutils, os]
-from semantics import ident
+import builtins
 
 const apiprefix = "onnim"
 
@@ -9,6 +9,7 @@ type
     indent = 0
 
 template indent(ctx: Context): string = "  ".repeat(ctx.indent)
+
 template apicall(name: string, args: varargs[string, `$`], module: string = "", types: seq[string] = @[]): string = 
   apiprefix & (
     if module != "": "_" & module 
@@ -17,6 +18,8 @@ template apicall(name: string, args: varargs[string, `$`], module: string = "", 
     if types.len != 0: "[" & types.join(", ") & "]"
     else: ""
   ) & "(" & args.join(", ") & ")"
+
+template ident(name: string): string = "s_" & name.replace("_", "_U")
 
 proc nimtype(t: Type): string =
   case t.kind:
@@ -28,11 +31,13 @@ proc nimtype(t: Type): string =
       if i != 0: args &= ", "
       let isVar = if argt.mutable: " var" else: ""
       args &= fmt"{argt.name}:{isVar} {nimtype(argt.argType)}"
-    if t.returnType.neq(typeUndefined):
+    if t.returnType.neq(unsetType):
       return fmt"proc ({args}): {t.returnType}"
     return fmt"proc ({args})"
   of typePtr:
     return fmt"uint #[ptr {nimtype(t.ptrBase)}]#"
+  of typeBase:
+    return "`" & t.name & "`"
   else: 
     echo "Unhandled type: ", t 
     quit(1)
@@ -120,7 +125,7 @@ proc visitFuncStatement(ctx: Context, node: FuncStatement): string =
     let varPrefix = if arg.mutable: "var " else: ""
     result &= fmt"{arg.argToken.lexeme}: {varPrefix}{nimtype(arg.argType)}"
   result &= ")"
-  if node.returnType.neq(typeUndefined):
+  if node.returnType.neq(unsetType):
     result &= fmt": {nimtype(node.returnType)}"
   result &= fmt" = {ctx.visit(node.funcBlock)}"
   
@@ -130,7 +135,7 @@ proc visitReturnStatement(ctx: Context, node: ReturnStatement): string =
   result = fmt"return {ctx.visit(node.value)}"
 
 proc visitCallStatement(ctx: Context, node: CallStatement): string =
-  return (if node.expr.exprType.neq(typeUndefined): "discard " else: "") & ctx.visit(node.expr)
+  return (if node.expr.exprType.neq(unsetType): "discard " else: "") & ctx.visit(node.expr)
 
 proc visitRegionStatement(ctx: Context, node: RegionStatement): string =
   return apicall("region", node.name.lexeme, module="system") & ":" & ctx.visit(node.regionBlock)
@@ -165,8 +170,14 @@ proc generateCode*(node: Statement): string =
   var ctx = Context()
   result = &"""import {currentSourcePath().absolutePath()}/src/std/[system]
 
-var `SYMregion` = onnim_system_newArena()
+var s_region = onnim_system_newArena()  # DEPRECATED
 
-block `transpiled`:""" & ctx.visit(node) & "\n"
+"""
+
+  result &= generateBuiltins()
+
+  result &= """
+
+block transpiled:""" & ctx.visit(node) & "\n"
   ctx.indent.inc
-  result &= ctx.indent() & "quit(0)"
+  result &= ctx.indent()

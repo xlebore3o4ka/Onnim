@@ -3,18 +3,21 @@ import tokens
 
 type
   TypeKind* = enum
-    typeUndefined
 
-    typeInt
+    typeInt {.deprecated.}
 
-    typeBool
+    typeBool {.deprecated.}
 
-    typeFunc
-    typePtr
+    typeFunc {.deprecated.}
+    typePtr {.deprecated.}
 
-    typeRegion
+    typeRegion {.deprecated.}
 
-  ArgType* = object
+    typeUnset
+    typeBase
+    typeType
+
+  ArgType* {.deprecated.} = object
     name*: string
     argType*: Type
     mutable*: bool
@@ -29,23 +32,29 @@ type
       ptrRegion*: Type
     of typeRegion:
       regionName*: Token
+    of typeBase:
+      name*: string
+    of typeType:
+      baseType*: Type
     else: discard
 
 let
-  undefinedType* = Type(kind: typeUndefined)
-  int64Type* = Type(kind: typeInt)
-  boolType* = Type(kind: typeBool)
+  unsetType* = Type(kind: typeUnset)
+  int64Type* {.deprecated.} = Type(kind: typeInt)
+  boolType* {.deprecated.} = Type(kind: typeBool)
 var
-  funcTypes*: seq[Type]
-  ptrTypes*: seq[Type]
-  regionTypes*: seq[Type]
+  funcTypes: seq[Type]
+  ptrTypes: seq[Type]
+  regionTypes: seq[Type]
+  baseTypes: seq[Type]
+  typeTypes: seq[Type]
 
 proc eq*(a: Type, b: Type): bool
 
-proc `==`*(a: ArgType, b: ArgType): bool {.inline.} =
+proc `==`*(a: ArgType, b: ArgType): bool {.inline, deprecated.} =
   return a.argType.eq(b.argType) and a.mutable == b.mutable
 
-proc `==`*(a: seq[ArgType], b: seq[ArgType]): bool {.inline.} =
+proc `==`*(a: seq[ArgType], b: seq[ArgType]): bool {.inline, deprecated.} =
   if a.len != b.len: return false
   for n in 0..a.high:
     let arg_a = a[n]
@@ -57,6 +66,9 @@ proc `==`*(a: seq[ArgType], b: seq[ArgType]): bool {.inline.} =
 proc eq*(a: Type, b: Type): bool =
   if a == nil or b == nil: return false
   if a.kind != b.kind: return false
+
+  if a.kind == typeBase:
+    return a.name == b.name
 
   if a.kind == typeFunc:
     if a.argTypes.len != b.argTypes.len: return false
@@ -87,7 +99,7 @@ proc eq*(a: TypeKind, b: TypeKind): bool {.inline.} =
 proc neq*(a: Type | TypeKind, b: Type | TypeKind): bool {.inline.} =
   not eq(a, b)
 
-proc getFuncType*(argTypes: seq[ArgType], returnType: Type): Type =
+proc getFuncType*(argTypes: seq[ArgType], returnType: Type): Type {.deprecated.} =
   for funcType in funcTypes:
     if funcType.argTypes == argTypes and eq(funcType.returnType, returnType):
       return funcType
@@ -95,7 +107,7 @@ proc getFuncType*(argTypes: seq[ArgType], returnType: Type): Type =
   result = Type(kind: typeFunc, argTypes: argTypes, returnType: returnType)
   funcTypes.add(result)
 
-proc getPtrType*(baseType: Type, region: Type): Type =
+proc getPtrType*(baseType: Type, region: Type): Type {.deprecated.} =
   for ptrType in ptrTypes:
     if eq(ptrType.ptrBase, baseType) and eq(ptrType.ptrRegion, region):
       return ptrType
@@ -103,7 +115,7 @@ proc getPtrType*(baseType: Type, region: Type): Type =
   result = Type(kind: typePtr, ptrBase: baseType, ptrRegion: region)
   ptrTypes.add(result)
 
-proc getRegionType*(name: Token): Type =
+proc getRegionType*(name: Token): Type {.deprecated.} =
   for regionType in regionTypes:
     if regionType.regionName.lexeme == name.lexeme:
       return regionType
@@ -111,9 +123,25 @@ proc getRegionType*(name: Token): Type =
   result = Type(kind: typeRegion, regionName: name)
   regionTypes.add(result)
 
+proc getBaseType*(name: string): Type =
+  for baseType in baseTypes:
+    if baseType.name == name:
+      return baseType
+  
+  result = Type(kind: typeBase, name: name)
+  baseTypes.add(result)
+
+proc getTypeType*(baseType: Type): Type =
+  for typeType in typeTypes:
+    if typeType.baseType == baseType:
+      return typeType
+  
+  result = Type(kind: typeType, baseType: baseType)
+  typeTypes.add(result)
+
 proc `$`*(k: TypeKind): string =
   case k
-  of typeUndefined: "unset"
+  of typeUnset:     "unset"
   of typeInt:       "int"
 
   of typeBool:      "bool"
@@ -122,9 +150,12 @@ proc `$`*(k: TypeKind): string =
 
   of typeRegion:    "region"
 
+  of typeBase:      "base-type"
+  of typeType:      "Type"
+
 proc `$`*(t: Type): string 
 
-proc `$`*(argTypes: seq[ArgType]): string =
+proc `$`*(argTypes: seq[ArgType]): string {.deprecated.} =
   var args: seq[string]
   for arg in argTypes:
     let mutableSuffix = if arg.mutable: "$" else: "!"
@@ -140,4 +171,8 @@ proc `$`*(t: Type): string =
     return $t.ptrBase & "^" & $t.ptrRegion.regionName.lexeme
   of typeRegion:
     return "region '" & $t.regionName.lexeme & "'"
+  of typeBase:
+    return $t.name
+  of typeType:
+    return "Type[" & $t.baseType & "]"
   else: return $t.kind

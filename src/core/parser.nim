@@ -38,19 +38,20 @@ proc expectToken(self: var Parser, expected: varargs[TokenKind]): Token =
   return token
 
 proc isExpression(self: Parser, token: Token): bool =
-  token.kind in {tkLParen, tkNumber, tkTrue, tkFalse, tkIdent, tkBang, tkMinus, tkPlus}
+  token.kind in {tkLParen, tkNumber, tkTrue, tkFalse, tkIdent, tkBang, tkMinus, tkPlus, tkType}
 
 proc isType(self: Parser, token: Token): bool =
-  token.kind in {tkInt64, tkBool, tkUnder, tkRegion}
+  token.kind in {tkType, tkInt64, tkBool, tkUnder, tkRegion}
 
 proc parseType(self: var Parser, token: Token): Type =
   case token.kind:
+  of tkType: result = getBaseType(token.lexeme)
   of tkInt64: result = int64Type
   of tkBool: result = boolType
-  of tkUnder: result = undefinedType
+  of tkUnder: result = unsetType
   else:
     newError(errType, token, token.mean)
-    result = undefinedType
+    result = unsetType
 
   while self.peekToken().kind in {tkLParen, tkCaret}:
     let tok = self.nextToken()
@@ -104,6 +105,11 @@ proc parsePrimary(self: var Parser): Expression =
       self.skipToken()
       requireImmutable = true
     return newIdentExpression(token, requireImmutable)
+
+  elif token.kind == tkType:
+    result = newTypeExpression(token)
+    result.exprType = getTypeType(self.parseType(token))
+    return result
 
   self.newError(errExpression, token, token.mean)
   return newInvalidExpression(token)
@@ -255,10 +261,10 @@ proc parseWhile(self: var Parser): Statement =
   
   return newWhileStatement(token, cond, whileBlock)
 
-proc parseFunc(self: var Parser): Statement =
+proc parseFunc(self: var Parser): Statement {.deprecated.} =
   let token = self.nextToken()
 
-  var funcType = undefinedType
+  var funcType = unsetType
 
   if self.isType(self.peekToken()):
     funcType = self.parseType(self.nextToken())
@@ -301,7 +307,7 @@ proc parseReturn(self: var Parser): Statement =
 
   return newReturnStatement(token, expression)
 
-proc parseRegion(self: var Parser): Statement =
+proc parseRegion(self: var Parser): Statement {.deprecated.} =
   let token = self.nextToken()
   let name = self.expectToken(tkIdent)
   let regionBlock = self.parseBlock(tkEnd)

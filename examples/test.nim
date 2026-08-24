@@ -1,14 +1,10 @@
 import /home/xlebore3o4ka/nimProjects/Onnim/src/std/[system]
 
-var `SYMregion` = onnim_system_newArena()
+var s_region = onnim_system_newArena()  # DEPRECATED
 
-block `transpiled`:
-  onnim_system_region(`SYMA`):
-    var `SYMx`: uint #[ptr int]# = onnim_system_addArena[int](`SYMA`, 10)
-    var `SYMy`: uint #[ptr int]# = `SYMx`
-    onnim_system_getArena[int](`SYMA`, `SYMy`) = onnim_system_getArena[int](`SYMA`, `SYMy`) + 1
-    var `SYMb`: int = onnim_system_getArena[int](`SYMA`, `SYMx`)
-    var `SYMc`: int = onnim_system_getArena[int](`SYMA`, `SYMy`)
-    echo `SYMb`
-    echo 
-  quit(0)
+type `Int` = int
+type `Number` = int
+type `Bool` = bool
+block transpiled:
+  var x: `Int` = 10
+  

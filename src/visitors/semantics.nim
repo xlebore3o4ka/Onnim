@@ -1,5 +1,6 @@
 import ../core/[ast, types, tokens, errors]
-import std/[tables, sequtils, strutils, options]
+import std/[tables, sequtils, strutils, options, macros]
+import builtins
 
 type
   Symbol = object
@@ -24,11 +25,15 @@ type
     expectedReturnType: Type
     expectedRegion: Type
 
-template ident*(name: string): string = "`SYM" & name.replace("_", "_U") & "`"
-template unident*(sym: string): string = sym.strip(chars = {'`'})[3..^1].replace("_U", "_")
+    builtins: Builtins[Symbol]
 
 proc newSymbol(self: Context, name: Token, symbolType: Type, mutable: bool) =
   self.currentScope.symbolTable[name.lexeme] = Symbol(definitionToken: name, symbolType: symbolType, mutable: mutable)
+  self.symbolScopeStack.mgetOrPut(name.lexeme, @[]).add(self.currentScope)
+
+proc newSymbolGet(self: Context, name: Token, symbolType: Type, mutable: bool): Symbol =
+  result = Symbol(definitionToken: name, symbolType: symbolType, mutable: mutable)
+  self.currentScope.symbolTable[name.lexeme] = result
   self.symbolScopeStack.mgetOrPut(name.lexeme, @[]).add(self.currentScope)
 
 proc pushScope(self: Context) =
@@ -60,27 +65,29 @@ proc visit(ctx: Context, node: Statement)
 proc setType(node: Expression, ctx: Context, exprType: Type) {.inline.} =
   node.exprType = exprType
 
-proc isArithmetizable(typ: TypeKind): bool {.inline.} = typ in {typeInt, typePtr}
-proc isArithmetizable(typ: Type):     bool {.inline.} = isArithmetizable(typ.kind)
-
-proc isСomparable(typ: TypeKind): bool {.inline.} = typ in {typeInt, typePtr}
-proc isСomparable(typ: Type):     bool {.inline.} = isСomparable(typ.kind)
+macro builtinType(name: untyped): untyped =
+  return quote do:
+    ctx.builtins.`name`.symbolType.baseType
 
 proc visitNumberExpression(ctx: Context, node: NumberExpression) =
-  node.setType(ctx, int64Type)
+  node.setType(ctx, builtinType(Number))
 
 proc visitBoolExpression(ctx: Context, node: BoolExpression) =
-  node.setType(ctx, boolType)
+  node.setType(ctx, builtinType(Bool))
+
+template isNumber(typ: Type): bool =
+  typ.eq(builtinType(Number)) or
+    typ.eq(builtinType(Int))
 
 proc visitUnaryExpression(ctx: Context, node: UnaryExpression) =
   ctx.visit(node.value)
   let op  = node.token.kind
   let typ = node.value.exprType
 
-  if typ.isArithmetizable() and op in {tkPlus, tkMinus}:
+  if typ.isNumber() and op in {tkPlus, tkMinus}:
     node.setType(ctx, node.value.exprType)
 
-  elif typ.eq(typeBool) and op == tkBang:
+  elif typ.eq(builtinType(Bool)) and op == tkBang:
     node.setType(ctx, node.value.exprType)
 
   else:
@@ -89,31 +96,29 @@ proc visitUnaryExpression(ctx: Context, node: UnaryExpression) =
 proc isMutableExpression(ctx: Context, node: Expression): Option[bool] =
   case node.kind:
   of exprIdent:
-    let name = unident(node.token.lexeme)
+    let name = node.token.lexeme
     if not ctx.symbolExists(name): 
       return none(bool)
     let sym = ctx.getSymbol(name)
     return some(sym.mutable and not IdentExpression(node).requireImmutable)
 
   of exprDeref:
-    return some(true)
+    return ctx.isMutableExpression(DerefExpression(node).value)
 
   else:
     return some(false)
+
+template isArithmetizable(typ: Type): bool =
+  typ.isNumber()
+
+template isСomparable(typ: Type): bool =
+  typ.isNumber() or typ.eq(builtinType(Bool))
 
 proc visitBinaryExpression(ctx: Context, node: BinaryExpression) =
   ctx.visit(node.left)
   ctx.visit(node.right)
 
   block typeSemantics:
-    if not (node.left.exprType.isArithmetizable() and node.right.exprType.isArithmetizable()) and
-       not (node.left.exprType.isСomparable()     and node.right.exprType.isСomparable())     and
-            node.left.exprType.neq(typeRegion)    and
-            node.left.exprType.neq(node.right.exprType):
-
-      newError(errBinaryTypeMismatch, node.token, node.token.lexeme, node.left.exprType, node.right.exprType)
-      break typeSemantics
-
     var typ = node.left.exprType
     let op  = node.token.kind
 
@@ -121,11 +126,11 @@ proc visitBinaryExpression(ctx: Context, node: BinaryExpression) =
       if   typ.isArithmetizable() and op in {tkPlus, tkMinus, tkStar, tkSlash, tkPercent}: 
         break opSemantics
       elif typ.isСomparable() and op in {tkGT, tkLT, tkGTE, tkLTE, tkEqualsEquals, tkBangEquals}: 
-        typ = boolType
+        typ = builtinType(Bool)
         break opSemantics
-      elif typ.eq(boolType) and op in {tkAnd, tkOr, tkEqualsEquals, tkBangEquals}: 
+      elif typ.eq(builtinType(Bool)) and op in {tkAnd, tkOr, tkEqualsEquals, tkBangEquals}: 
         break opSemantics
-      elif typ.eq(typeRegion) and op == tkAt: 
+      elif typ.eq(typeRegion) and op == tkAt: # DEPRECATED
         let isMutable = ctx.isMutableExpression(node.left)
         if isMutable.isSome and not isMutable.get():
           newError(errExpectedMutable, node.left.token)
@@ -147,7 +152,7 @@ proc visitIdentExpression(ctx: Context, node: IdentExpression) =
   else:
     node.setType(ctx, ctx.getSymbol(name).symbolType)
     
-  node.token.lexeme = ident(node.token.lexeme)
+  node.token.lexeme = node.token.lexeme
 
 proc toArgTypes(ctx: Context, args: seq[Expression]): seq[ArgType] =
   result = newSeq[ArgType](args.len)
@@ -182,7 +187,7 @@ proc visitCallExpression(ctx: Context, node: CallExpression) =
 
     if givenArgTypes notin expectedArgTypes.mapIt(it.argTypes):
       let funcName = if node.value.kind == exprIdent:
-        "'" & unident(node.value.token.lexeme) & "'"
+        "'" & node.value.token.lexeme & "'"
       else:
         "function"
       
@@ -215,7 +220,8 @@ proc visitDeclarationStatement(ctx: Context, node: DeclarationStatement) =
   block semantics:
     ctx.visit(node.value)
 
-    if node.value.exprType.neq node.valueType:
+    if node.value.exprType.neq(node.valueType) and 
+      not (node.valueType.isNumber() and node.value.exprType.eq(builtinType(Number))):
       newError(errDeclarationTypeMismatch, node.token, node.valueType, node.name.lexeme, node.value.exprType)
       break semantics
 
@@ -226,14 +232,13 @@ proc visitDeclarationStatement(ctx: Context, node: DeclarationStatement) =
       break semantics
 
     ctx.newSymbol(node.name, node.valueType, node.mutable)
-    node.name.lexeme = ident(node.name.lexeme)
 
 proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement) =
   ctx.visit(node.left)
   ctx.visit(node.right)
   
   block semantics:
-    if node.left.exprType.eq(typeUndefined):
+    if node.left.exprType.eq(typeUnset):
       break semantics
 
     var isMutable = ctx.isMutableExpression(node.left)
@@ -243,7 +248,8 @@ proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement) =
 
     case node.left.kind:
     of exprIdent, exprDeref:
-      if node.left.exprType.neq node.right.exprType:
+      if node.left.exprType.neq(node.right.exprType) and 
+        not (node.left.exprType.isNumber() and node.right.exprType.eq(builtinType(Number))):
         newError(errTypeMismatch, node.token, node.left.exprType, node.right.exprType)
 
     else:
@@ -252,8 +258,8 @@ proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement) =
 
 proc visitBranchingStatement(ctx: Context, node: BranchingStatement) =
   ctx.visit(node.condition)
-  if node.condition.exprType.neq(boolType):
-    newError(errTypeMismatch, node.condition.token, node.condition.exprType, boolType)
+  if node.condition.exprType.neq(builtinType(Bool)):
+    newError(errTypeMismatch, node.condition.token, node.condition.exprType, builtinType(Bool))
   
   else:
     ctx.pushScope()
@@ -262,8 +268,8 @@ proc visitBranchingStatement(ctx: Context, node: BranchingStatement) =
   
   for elifBranch in node.elifBranches:
     ctx.visit(elifBranch.cond)
-    if elifBranch.cond.exprType.neq(boolType):
-      newError(errTypeMismatch, elifBranch.cond.token, elifBranch.cond.exprType, boolType)
+    if elifBranch.cond.exprType.neq(builtinType(Bool)):
+      newError(errTypeMismatch, elifBranch.cond.token, elifBranch.cond.exprType, builtinType(Bool))
 
     else:
       ctx.pushScope()
@@ -277,8 +283,8 @@ proc visitBranchingStatement(ctx: Context, node: BranchingStatement) =
 
 proc visitWhileStatement(ctx: Context, node: WhileStatement) =
   ctx.visit(node.condition)
-  if node.condition.exprType.neq(boolType):
-    newError(errTypeMismatch, node.condition.token, node.condition.exprType, boolType)
+  if node.condition.exprType.neq(builtinType(Bool)):
+    newError(errTypeMismatch, node.condition.token, node.condition.exprType, builtinType(Bool))
 
   else:
     ctx.pushScope()
@@ -344,19 +350,17 @@ proc visitFuncStatement(ctx: Context, node: FuncStatement) =
   let funcType = getFuncType(node.args.toArgTypes(), node.returnType)
   ctx.newSymbol(node.name, funcType, false)
   let name = node.name.lexeme
-  node.name.lexeme = ident(node.name.lexeme)
 
   ctx.pushScope()
   ctx.funcDepth.inc
   
   for arg in node.args:
     ctx.newSymbol(arg.argToken, arg.argType, arg.mutable)
-    arg.argToken.lexeme = ident(arg.argToken.lexeme)
   
   let expected = ctx.expectedReturnType
   ctx.expectedReturnType = node.returnType
 
-  if not ctx.expectedReturnType.eq(typeUndefined):
+  if not ctx.expectedReturnType.eq(unsetType):
     if not checkReturnPaths(node.funcBlock):
       newError(errMissingReturn, node.name, name)
 
@@ -372,12 +376,12 @@ proc visitReturnStatement(ctx: Context, node: ReturnStatement) =
     newError(errReturnOutsideFunc, node.token)
     return
 
-  if ctx.expectedReturnType.eq(typeUndefined):
+  if ctx.expectedReturnType.eq(unsetType):
     if node.value != nil:
       newError(errReturnValue, node.token)
   else:
     if node.value == nil:
-      newError(errReturnTypeMismatch, node.token, ctx.expectedReturnType, undefinedType)
+      newError(errReturnTypeMismatch, node.token, ctx.expectedReturnType, unsetType)
     else:
       ctx.visit(node.value)
       if node.value.exprType.neq(ctx.expectedReturnType):
@@ -400,7 +404,6 @@ proc visitRegionStatement(ctx: Context, node: RegionStatement) =
 
     ctx.expectedRegion = getRegionType(node.name)
     ctx.newSymbol(node.name, ctx.expectedRegion, true)
-    node.name.lexeme = ident(node.name.lexeme)
 
   ctx.visit(node.regionBlock)
 
@@ -434,8 +437,12 @@ proc visit(ctx: Context, node: Statement) =
   of stmtRegion: visitRegionStatement(ctx, RegionStatement(node))
   else: discard
 
+macro newTypeSymbol(name: untyped): untyped =
+  let strName = $name
+  return quote do:
+    newSymbolGet(ctx, Token(kind: tkType, lexeme: `strName`), getTypeType(getBaseType(`strName`)), false)
+
 proc checkSemantics*(node: Statement) =
-  let regionToken = Token(lexeme: "region")
   var ctx = Context(
     currentScope: Scope(
       depth: 0,
@@ -443,7 +450,16 @@ proc checkSemantics*(node: Statement) =
       symbolTable: initTable[string, Symbol]()
     ),
     symbolScopeStack: initTable[string, seq[Scope]](),
-    expectedRegion: getRegionType(regionToken)
   )
+
+  ctx.builtins = newBuiltins[Symbol](
+    IntSym    = newTypeSymbol(Int),
+    NumberSym = newTypeSymbol(Number),
+    BoolSym   = newTypeSymbol(Bool)
+  )
+
+  let regionToken = Token(kind: tkIdent, lexeme: "region")
   ctx.newSymbol(regionToken, getRegionType(regionToken), true)
+  ctx.expectedRegion = getRegionType(regionToken)
+
   ctx.visit(node)

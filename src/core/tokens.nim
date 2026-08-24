@@ -4,6 +4,7 @@ type
   TokenKind* = enum
     tkNumber
     tkIdent
+    tkType
 
     tkPlus, tkMinus, tkStar, tkSlash, tkPercent
     tkGT, tkLT, tkGTE, tkLTE, tkEqualsEquals, tkBangEquals
@@ -11,13 +12,13 @@ type
 
     tkLParen, tkRParen
 
-    tkInt64, tkBool, tkUnder
+    tkInt64 {.deprecated.}, tkBool {.deprecated.}, tkUnder {.deprecated.}
 
     tkAnd, tkOr, tkTrue, tkFalse
     tkIf, tkElif, tkElse, tkDo, tkEnd
     tkWhile, tkContinue, tkBreak
-    tkFunc, tkReturn
-    tkRegion
+    tkFunc {.deprecated.}, tkReturn
+    tkRegion {.deprecated.}
 
     tkEOF
     tkInvalid
@@ -111,6 +112,7 @@ proc mean*(kind: TokenKind): string =
   case kind:
   of tkNumber:        return "number"
   of tkIdent:         return "identifier"
+  of tkType:          return "Type"
   
   of tkPlus:          return "plus operator '+'"
   of tkMinus:         return "minus operator '-'"
@@ -136,7 +138,6 @@ proc mean*(kind: TokenKind): string =
 
   of tkInt64:         return "type 'int64'"
   of tkBool:          return "type 'bool'"
-
   of tkUnder:         return "under operator '_'"
   
   of tkAnd:           return "keyword 'and'"
