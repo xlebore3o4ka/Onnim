@@ -2,6 +2,7 @@ import tokens, types
 import std/[macros]
 
 template onnimnode*(kind: untyped) {.pragma.}
+template comptime*() {.pragma.}
 
 
 proc unstar(n: NimNode): NimNode =
@@ -134,17 +135,18 @@ constructors:
       exprCall, exprDeref, exprKindType, exprFunc
 
       stmtInvalid, stmtBlock, stmtDeclaration, stmtAssignment, stmtBranching
-      stmtWhile, stmtContinue, stmtBreak, stmtReturn, stmtCall
+      stmtWhile, stmtContinue, stmtBreak, stmtReturn, stmtCall, stmtDef
       stmtRegion
 
     Expression* = ref object of RootObj
       kind*: NodeKind
       token*: Token
       exprType*: Type
+      comptime*: bool
 
     InvalidExpression* {.onnimnode: exprInvalid.} = ref object of Expression
 
-    NumberExpression* {.onnimnode: exprNumber.} = ref object of Expression
+    NumberExpression* {.onnimnode: exprNumber, comptime.} = ref object of Expression
       ## <number>
       ## number = token
 
@@ -159,7 +161,7 @@ constructors:
       left*: Expression
       right*: Expression
 
-    BoolExpression* {.onnimnode: exprBool.} = ref object of Expression
+    BoolExpression* {.onnimnode: exprBool, comptime.} = ref object of Expression
       ## <bool>
       ## bool = token
 
@@ -179,7 +181,7 @@ constructors:
       ## "^" = token
       value*: Expression
 
-    TypeExpression* {.onnimnode: exprKindType.} = ref object of Expression
+    TypeExpression* {.onnimnode: exprKindType, comptime.} = ref object of Expression
       ## <type>
       ## type = token
       ## exprType has typeType
@@ -193,6 +195,7 @@ constructors:
     Statement* = ref object of RootObj
       kind*: NodeKind
       token*: Token
+      comptime*: bool
 
     InvalidStatement* {.onnimnode: stmtInvalid.} = ref object of Statement
 
@@ -246,6 +249,12 @@ constructors:
       ## <expr>
       ## "(" = token
       expr*: CallExpression
+
+    DefStatement* {.onnimnode: stmtDef.} = ref object of Statement
+      ## def <name> = <value>
+      ## def = token
+      name*: Token
+      value*: Expression
 
     RegionStatement* {.onnimnode: stmtRegion, deprecated.} = ref object of Statement
       ## region <name> <block>

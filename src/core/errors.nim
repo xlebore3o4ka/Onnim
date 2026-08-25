@@ -14,6 +14,8 @@ type
     errReturnOutsideFunc, errReturnValue, errReturnTypeMismatch
     errCallNonFunc, errNoMatchesCallForm, errMissingReturn
     errReturnInsideRegion
+
+    errUnsupportedDefinition
     
     errExpectedMutable
 
@@ -55,6 +57,8 @@ proc message(kind: ErrorKind): string =
   of errMissingReturn:           "Function @0 does not return a value on all paths"
   of errReturnInsideRegion:      "Return statement is not allowed inside region"
 
+  of errUnsupportedDefinition:   "You can only define comptime or one of [@0] constructs, got @."
+
   of errExpectedMutable:         "Expression is immutable"
 
 proc note(kind: ErrorKind): string =
@@ -65,26 +69,31 @@ proc note(kind: ErrorKind): string =
   of errExpectedSyntax:          "The parser expected @0 but found @1. Check the syntax rules for this construct"
   of errExpression:              "The expression containing @0 is not recognized as valid in this context"
   of errStatement:               "The statement containing @0 is not recognized as valid in this context"
-  of errType:                    "The type containing '@0' is not valid in this context."
+  of errType:                    "The type containing '@0' is not valid in this context. Tip: All types are capitalized"
 
-  of errUnaryTypeMismatch:       "Unary operator '@0' requires specific operand types. Check the operator's documentation for type requirements"
-  of errBinaryTypeMismatch:      "Binary operator '@0' cannot operate on types @1 and @2. Consider using type conversion"
-  of errDeclarationTypeMismatch: "Declaration of '@1' expects type @0 but the expression has type @2. Change either the type annotation or the expression"
-  of errTypeMismatch:            "Expected type @0 but found @1. Consider using explicit type conversion"
+  of errUnaryTypeMismatch:       "Unary operator '@0' requires specific operand types. Convert types: `expr -> T`. Tip: All types are capitalized"
+  of errBinaryTypeMismatch:      "Binary operator '@0' cannot operate on types @1 and @2. Consider using type conversion. Convert types: `expr -> T`. Tip: All types are capitalized"
+  of errDeclarationTypeMismatch: "Declaration of '@1' expects type @0 but the expression has type @2. Change either the type annotation or the expression. " & 
+    "Convert types: `expr -> T`. Tip: All types are capitalized"
+  of errTypeMismatch:            "Expected type @0 but found @1. Consider using explicit type conversion. Convert types: `expr -> T`. Tip: All types are capitalized"
   of errRedeclaration:           "Symbol '@0' was already declared at @1(@2:@3). Use a different name or different scope"
   of errUndeclaredSymbol:        "Symbol '@0' is not defined. Check for typos, imports, or declaration order"
 
   of errControlFlowOutsideLoop:  "The '@0' statement can only be used inside loops. Move it inside a loop or remove it"
 
-  of errReturnOutsideFunc:       "Return statement appears outside any function. Check function boundaries"
+  of errReturnOutsideFunc:       "Return statement appears outside any function. Define your function: `def name = Int(Int arg) do ... end`"
   of errReturnValue:             "Function without return type cannot return a value. Either add a return type or remove the value"
   of errReturnTypeMismatch:      "Function expects to return @0 but the expression has type @1. Adjust the return expression or function signature"
-  of errCallNonFunc:             "Value of type @0 is not callable. Only functions and procedures can be called"
-  of errNoMatchesCallForm:       "No overloaded @0 matches the expected call form @1. Check the available overloads above"
+  of errCallNonFunc:             "Only functions can be called. Define your function: `def name = Int(Int arg) do ... end`"
+  of errNoMatchesCallForm:       "The arguments of the called @0 do not match any available overload. Find the required overload above"
   of errMissingReturn:           "Function '@0' may not return a value on all paths. Ensure all branches return a value"
-  of errReturnInsideRegion:      "Return statement is not allowed inside region blocks"
+  of errReturnInsideRegion:      "Return statement is not allowed inside region blocks. Move the return statement to the end of the region statement."
 
-  of errExpectedMutable:         "Expression is immutable. Declare the variable as mutable or use a different approach"
+  of errUnsupportedDefinition:   "You can only define a value that is known at the compilation time, or one of the following constructs [@0], but you tried to define @1. " &
+    "Make sure that the value you defined is in this list or is a compile‑time constant"
+
+  of errExpectedMutable:         "Expression is immutable. Declare the symbol as mutable or use a different approach. Definition difference: `sym$` - mutable; `sym!` - immutable. " &
+    "Defining a symbol makes it mutable, but function argument symbols are immutable by default."
 
 proc newError*(kind: ErrorKind, file: string, line, col: Positive, len: Positive, args: varargs[string, `$`]) {.inline.} =
   errors.add(Error(
@@ -125,33 +134,61 @@ proc green(text: string): string =
 proc gray(text: string): string =
   result = ansiForegroundColorCode(fgWhite, bright=false) & text & ansiResetCode
 
+proc cyan(text: string): string =
+  result = ansiForegroundColorCode(fgCyan) & text & ansiResetCode
+
+proc colorBackticks(s: string): string =
+  result = ""
+  var i = 0
+
+  while i < s.len:
+    if s[i] == '`':
+      let closing = s.find('`', i + 1)
+
+      if closing >= 0:
+        result &= cyan(s[i..closing])
+        i = closing + 1
+      else:
+        result &= cyan("`")
+        inc i
+    else:
+      result.add(s[i])
+      inc i
+
 proc wrapText(text: string, maxLen: int = 80): string =
   const continuing = "\n  ?  "
   const prompt = "\n  ? Note:  "
 
   if text.len <= maxLen:
-    return green(prompt) & text
-  
+    return green(prompt) & colorBackticks(text)
+
   result = ""
   var remaining = text
   var isFirst = true
-  
+
   while remaining.len > 0:
     var chunkLen = min(maxLen, remaining.len)
+
+    let backtickPos = remaining.find('`')
+    if backtickPos >= 0 and backtickPos < chunkLen:
+      let closingPos = remaining.find('`', backtickPos + 1)
+      if closingPos >= 0 and closingPos >= chunkLen:
+        chunkLen = closingPos + 1
+
     if chunkLen < remaining.len:
-      var lastSpace = remaining.rfind(' ', 0, chunkLen)
+      let lastSpace = remaining.rfind(' ', 0, chunkLen)
       if lastSpace > 0:
         chunkLen = lastSpace
-    
-    let chunk = remaining[0..<chunkLen]
-    remaining = remaining[chunkLen..^1].strip(leading=true)
-    
+
+    let chunk = colorBackticks(remaining[0..<chunkLen])
+    remaining = remaining[chunkLen..^1].strip(leading = true)
+
     if isFirst:
-      result &= green(prompt) & continuing & chunk
+      result &= green(prompt & continuing) & chunk
       isFirst = false
     else:
-      result &= continuing & chunk
-  
+      result &= green(continuing) & chunk
+
   return result
 
 proc format*(error: Error, short: bool): string =

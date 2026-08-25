@@ -260,7 +260,9 @@ proc visitFuncExpression(ctx: Context, node: FuncExpression) =
   for arg in node.exprType.argTypes:
     ctx.newSymbol(copy(node.token, kind = tkIdent, lexeme = arg.name), arg.argType, arg.mutable)
 
+  ctx.pushScope()  # The second level of nesting is needed to allow redefining (shadowing) the arguments
   ctx.visit(node.funcBlock)
+  ctx.popScope()
 
   ctx.expectedReturnType = expected
 
@@ -394,6 +396,13 @@ proc visitRegionStatement(ctx: Context, node: RegionStatement) =
   
   ctx.popScope()
 
+proc visitDefStatement(ctx: Context, node: DefStatement) =
+  ctx.visit(node.value)
+
+  block semantics:
+    if node.value.kind notin {exprFunc} and not node.value.comptime:
+      newError(errUnsupportedDefinition, node.value.token, $typeFunc & " do ... end", node.value.exprType)
+
 proc visit(ctx: Context, node: Expression) =
   case node.kind:
   of exprNumber: visitNumberExpression(ctx, NumberExpression(node))
@@ -417,6 +426,7 @@ proc visit(ctx: Context, node: Statement) =
   of stmtBreak: visitBreakStatement(ctx, BreakStatement(node))
   of stmtReturn: visitReturnStatement(ctx, ReturnStatement(node))
   of stmtCall: visitCallStatement(ctx, CallStatement(node))
+  of stmtDef: visitDefStatement(ctx, DefStatement(node))
   of stmtRegion: visitRegionStatement(ctx, RegionStatement(node))
   else: discard
 

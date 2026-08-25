@@ -284,6 +284,14 @@ proc parseRegion(self: var Parser): Statement {.deprecated.} =
 
   return newRegionStatement(token, name, regionBlock)
 
+proc parseDef(self: var Parser): Statement =
+  let token = self.nextToken()
+  let name = self.expectToken(tkIdent)
+  discard self.expectToken(tkEquals)
+  let value = self.parseExpression()
+
+  return newDefStatement(token, name, value)
+
 proc parseStatement(self: var Parser): Statement =
   let token = self.lexer.peekToken()
 
@@ -307,6 +315,9 @@ proc parseStatement(self: var Parser): Statement =
 
   elif token.kind == tkReturn:
     return self.parseReturn()
+
+  elif token.kind == tkDef:
+    return self.parseDef()
 
   elif self.isExpression(token):
     let expr = self.parseExpression()
