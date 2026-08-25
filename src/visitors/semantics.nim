@@ -215,6 +215,58 @@ proc visitDerefExpression(ctx: Context, node: DerefExpression) =
   else:
     node.setType(ctx, node.value.exprType.ptrBase)
 
+proc checkReturnPaths(stmt: Statement): bool =
+  case stmt.kind:
+  of stmtReturn:
+    return true
+  of stmtBlock:
+    let blockStmt = BlockStatement(stmt)
+    for s in blockStmt.statements:
+      if checkReturnPaths(s):
+        return true
+    return false
+  of stmtBranching:
+    let branchStmt = BranchingStatement(stmt)
+    var hasElse = branchStmt.elseBlock != nil
+    for elifBranch in branchStmt.elifBranches:
+      if checkReturnPaths(elifBranch.elifBlock):
+        return true
+    if branchStmt.ifBlock != nil and checkReturnPaths(branchStmt.ifBlock):
+      return true
+    if hasElse and checkReturnPaths(branchStmt.elseBlock):
+      return true
+    return false
+  of stmtWhile:
+    return false
+  of stmtRegion:
+    let regionStmt = RegionStatement(stmt)
+    if checkReturnPaths(regionStmt.regionBlock):
+      newError(errReturnInsideRegion, regionStmt.token)
+    return false
+  else:
+    return false
+
+proc visitFuncExpression(ctx: Context, node: FuncExpression) =
+  ctx.pushScope()
+  ctx.funcDepth.inc
+
+  let expected = ctx.expectedReturnType
+  ctx.expectedReturnType = node.exprType.returnType
+
+  if not ctx.eq(ctx.expectedReturnType, unsetType):
+    if not checkReturnPaths(node.funcBlock):
+      newError(errMissingReturn, node.token, node.exprType)
+
+  for arg in node.exprType.argTypes:
+    ctx.newSymbol(copy(node.token, kind = tkIdent, lexeme = arg.name), arg.argType, arg.mutable)
+
+  ctx.visit(node.funcBlock)
+
+  ctx.expectedReturnType = expected
+
+  ctx.funcDepth.dec
+  ctx.popScope()
+
 proc visitBlockStatement(ctx: Context, node: BlockStatement) =
   for stmt in node.statements:
     ctx.visit(stmt)
@@ -302,76 +354,6 @@ proc visitBreakStatement(ctx: Context, node: BreakStatement) =
   if ctx.loopDepth == 0:
     newError(errControlFlowOutsideLoop, node.token, "break")
 
-proc checkReturnPaths(stmt: Statement): bool =
-  case stmt.kind:
-  of stmtReturn:
-    return true
-  of stmtBlock:
-    let blockStmt = BlockStatement(stmt)
-    for s in blockStmt.statements:
-      if checkReturnPaths(s):
-        return true
-    return false
-  of stmtBranching:
-    let branchStmt = BranchingStatement(stmt)
-    var hasElse = branchStmt.elseBlock != nil
-    for elifBranch in branchStmt.elifBranches:
-      if checkReturnPaths(elifBranch.elifBlock):
-        return true
-    if branchStmt.ifBlock != nil and checkReturnPaths(branchStmt.ifBlock):
-      return true
-    if hasElse and checkReturnPaths(branchStmt.elseBlock):
-      return true
-    return false
-  of stmtWhile:
-    return false
-  of stmtRegion:
-    let regionStmt = RegionStatement(stmt)
-    if checkReturnPaths(regionStmt.regionBlock):
-      newError(errReturnInsideRegion, regionStmt.token)
-    return false
-  else:
-    return false
-
-proc toArgTypes*(args: seq[FuncArg]): seq[ArgType] =
-  result = newSeq[ArgType](args.len)
-  for i, arg in args:
-    result[i] = ArgType(
-      name: arg.argToken.lexeme,
-      argType: arg.argType,
-      mutable: arg.mutable
-    )
-
-proc visitFuncStatement(ctx: Context, node: FuncStatement) =
-  if ctx.symbolExistsInCurrentScope(node.name.lexeme):
-    let symbol = ctx.getSymbol(node.name.lexeme)
-    newError(errRedeclaration, node.name, symbol.definitionToken.lexeme, symbol.definitionToken.file, symbol.definitionToken.line, symbol.definitionToken.col)
-    return
-
-  let funcType = getFuncType(node.args.toArgTypes(), node.returnType)
-  ctx.newSymbol(node.name, funcType, false)
-  let name = node.name.lexeme
-
-  ctx.pushScope()
-  ctx.funcDepth.inc
-  
-  for arg in node.args:
-    ctx.newSymbol(arg.argToken, arg.argType, arg.mutable)
-  
-  let expected = ctx.expectedReturnType
-  ctx.expectedReturnType = node.returnType
-
-  if not ctx.eq(ctx.expectedReturnType, unsetType):
-    if not checkReturnPaths(node.funcBlock):
-      newError(errMissingReturn, node.name, name)
-
-  ctx.visit(node.funcBlock)
-
-  ctx.expectedReturnType = expected
-  
-  ctx.funcDepth.dec
-  ctx.popScope()
-
 proc visitReturnStatement(ctx: Context, node: ReturnStatement) =
   if ctx.funcDepth == 0:
     newError(errReturnOutsideFunc, node.token)
@@ -421,6 +403,7 @@ proc visit(ctx: Context, node: Expression) =
   of exprIdent: visitIdentExpression(ctx, IdentExpression(node))
   of exprCall: visitCallExpression(ctx, CallExpression(node))
   of exprDeref: visitDerefExpression(ctx, DerefExpression(node))
+  of exprFunc: visitFuncExpression(ctx, FuncExpression(node))
   else: discard
 
 proc visit(ctx: Context, node: Statement) =
@@ -432,7 +415,6 @@ proc visit(ctx: Context, node: Statement) =
   of stmtWhile: visitWhileStatement(ctx, WhileStatement(node))
   of stmtContinue: visitContinueStatement(ctx, ContinueStatement(node))
   of stmtBreak: visitBreakStatement(ctx, BreakStatement(node))
-  of stmtFunc: visitFuncStatement(ctx, FuncStatement(node))
   of stmtReturn: visitReturnStatement(ctx, ReturnStatement(node))
   of stmtCall: visitCallStatement(ctx, CallStatement(node))
   of stmtRegion: visitRegionStatement(ctx, RegionStatement(node))

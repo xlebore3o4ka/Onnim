@@ -17,6 +17,7 @@ type
     tkWhile, tkContinue, tkBreak
     tkFunc {.deprecated.}, tkReturn
     tkRegion {.deprecated.}
+    tkDef
 
     tkEOF
     tkInvalid
@@ -92,7 +93,9 @@ const keywordTable* = {
   "func": tkFunc,
   "return": tkReturn,
 
-  "region": tkRegion
+  "region": tkRegion,
+
+  "def": tkDef
   
 }.toTable
 
@@ -148,6 +151,8 @@ proc mean*(kind: TokenKind): string =
   of tkReturn:        return "keyword 'return'"
 
   of tkRegion:        return "keyword 'region'"
+
+  of tkDef:           return "keyword 'def'"
   
   of tkInvalid:       return "invalid token"
   of tkEOF:           return "end of file"

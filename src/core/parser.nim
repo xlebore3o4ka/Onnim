@@ -83,6 +83,29 @@ proc parseType(self: var Parser, token: Token): Type =
 
 proc parseExpression(self: var Parser): Expression
 
+proc parseStatement(self: var Parser): Statement
+
+proc parseBlock(self: var Parser, endKinds: varargs[TokenKind], consume: bool = true): BlockStatement =
+  discard self.expectToken(tkDo)
+
+  var stmts: seq[Statement]
+  
+  while self.peekToken().kind notin endKinds and self.peekToken().kind != tkEOF:
+    stmts.add(self.parseStatement())
+  
+  let endToken = if consume:
+    self.expectToken(endKinds)
+  else:
+    self.peekToken()
+  
+  result = newBlockStatement(endToken, stmts)
+
+proc parseFuncExpression(self: var Parser, funcType: Type): Expression =
+  let funcToken = self.peekToken()
+  let funcBlock = self.parseBlock(tkEnd)
+  result = newFuncExpression(funcToken, funcBlock)
+  result.exprType = funcType
+
 proc parsePrimary(self: var Parser): Expression =
   let token = self.nextToken()
 
@@ -105,8 +128,11 @@ proc parsePrimary(self: var Parser): Expression =
     return newIdentExpression(token, requireImmutable)
 
   elif token.kind == tkType:
+    let typ = self.parseType(token)
+    if typ.eq(typeFunc) and self.peekToken().kind == tkDo:
+      return self.parseFuncExpression(typ)
     result = newTypeExpression(token)
-    result.exprType = getTypeType(self.parseType(token))
+    result.exprType = getTypeType(typ)
     return result
 
   self.newError(errExpression, token, token.mean)
@@ -193,8 +219,6 @@ proc parseAt(self: var Parser): Expression =
 proc parseExpression(self: var Parser): Expression =
   return self.parseAt()
 
-proc parseStatement(self: var Parser): Statement
-
 proc parseDeclaration(self: var Parser): Statement =
   let valueType = self.parseType(self.nextToken())
   let name = self.expectToken(tkIdent)
@@ -211,21 +235,6 @@ proc parseDeclaration(self: var Parser): Statement =
   let value = self.parseExpression()
 
   return newDeclarationStatement(token, valueType, name, value, mutable)
-
-proc parseBlock(self: var Parser, endKinds: varargs[TokenKind], consume: bool = true): BlockStatement =
-  discard self.expectToken(tkDo)
-
-  var stmts: seq[Statement]
-  
-  while self.peekToken().kind notin endKinds and self.peekToken().kind != tkEOF:
-    stmts.add(self.parseStatement())
-  
-  let endToken = if consume:
-    self.expectToken(endKinds)
-  else:
-    self.peekToken()
-  
-  result = newBlockStatement(endToken, stmts)
 
 proc parseBranching(self: var Parser): Statement =
   let token = self.nextToken()
@@ -258,43 +267,6 @@ proc parseWhile(self: var Parser): Statement =
   let whileBlock = self.parseBlock(tkEnd)
   
   return newWhileStatement(token, cond, whileBlock)
-
-proc parseFunc(self: var Parser): Statement {.deprecated.} =
-  let token = self.nextToken()
-
-  var funcType = unsetType
-
-  if self.isType(self.peekToken()):
-    funcType = self.parseType(self.nextToken())
-
-  let name = self.expectToken(tkIdent)
-
-  discard self.expectToken(tkLParen)
-
-  var args: seq[FuncArg]
-
-  while self.peekToken().kind != tkRParen and self.peekToken().kind != tkEOF:
-    let argType = self.parseType(self.nextToken())
-    let name = self.expectToken(tkIdent)
-
-    var mutable = false
-    if self.peekToken().kind == tkDollar:
-      self.skipToken()
-      mutable = true
-    elif self.peekToken().kind == tkBang:
-      self.skipToken()
-      mutable = false
-
-    args.add(argType, name, mutable)
-
-    if self.peekToken().kind == tkRParen: break
-    discard self.expectToken(tkComma)
-
-  discard self.expectToken(tkRParen)
-
-  let funcBlock = self.parseBlock(tkEnd)
-
-  return newFuncStatement(token, funcType, name, args, funcBlock)
 
 proc parseReturn(self: var Parser): Statement =
   let token = self.nextToken()
@@ -332,9 +304,6 @@ proc parseStatement(self: var Parser): Statement =
 
   elif token.kind == tkBreak:
     return newBreakStatement(self.nextToken())
-
-  elif token.kind == tkFunc:
-    return self.parseFunc()
 
   elif token.kind == tkReturn:
     return self.parseReturn()

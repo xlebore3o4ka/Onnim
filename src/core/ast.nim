@@ -127,23 +127,14 @@ macro constructors*(body: untyped): untyped =
         objectTy
       )
 
-type
-  FuncArg* = ref object
-    argType*: Type
-    argToken*: Token
-    mutable*: bool
-
-proc add*(arguments: var seq[FuncArg], argType: Type, argToken: Token, mutable: bool) =
-  arguments.add(FuncArg(argType: argType, argToken: argToken, mutable: mutable))
-
 constructors: 
   type
     NodeKind* = enum
       exprInvalid, exprNumber, exprUnary, exprBinary, exprBool, exprIdent,
-      exprCall, exprDeref, exprKindType
+      exprCall, exprDeref, exprKindType, exprFunc
 
       stmtInvalid, stmtBlock, stmtDeclaration, stmtAssignment, stmtBranching
-      stmtWhile, stmtContinue, stmtBreak, stmtFunc, stmtReturn, stmtCall
+      stmtWhile, stmtContinue, stmtBreak, stmtReturn, stmtCall
       stmtRegion
 
     Expression* = ref object of RootObj
@@ -192,6 +183,12 @@ constructors:
       ## <type>
       ## type = token
       ## exprType has typeType
+    
+    FuncExpression* {.onnimnode: exprFunc.} = ref object of Expression
+      ## <funcType> <funcBlock>
+      ## do = token
+      ## funcType = exprType
+      funcBlock*: BlockStatement
 
     Statement* = ref object of RootObj
       kind*: NodeKind
@@ -239,14 +236,6 @@ constructors:
     BreakStatement* {.onnimnode: stmtBreak.} = ref object of Statement
       ## break
       ## break = token
-
-    FuncStatement* {.onnimnode: stmtFunc, deprecated.} = ref object of Statement
-      ## func [type] <name> ( [<args>]* ) <block>
-      ## func = token
-      returnType*: Type
-      name*: Token
-      args*: seq[FuncArg]
-      funcBlock*: BlockStatement
 
     ReturnStatement* {.onnimnode: stmtReturn.} = ref object of Statement
       ## return [value]

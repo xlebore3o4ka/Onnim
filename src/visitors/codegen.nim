@@ -82,6 +82,17 @@ proc visitDerefExpression(ctx: Context, node: DerefExpression): string =
     types = @[nimtype(node.value.exprType.ptrBase)]
   )
 
+proc visitFuncExpression(ctx: Context, node: FuncExpression): string =
+  result = fmt"proc ("
+  for i, arg in node.exprType.argTypes:
+    if i != 0: result &= ", "
+    let varPrefix = if arg.mutable: "var " else: ""
+    result &= fmt"{ident(arg.name)}: {varPrefix}{nimtype(arg.argType)}"
+  result &= ")"
+  if node.exprType.returnType.neq(unsetType):
+    result &= fmt": {nimtype(node.exprType.returnType)}"
+  result &= fmt" = {ctx.visit(node.funcBlock)}"
+
 
 # STATEMENTS
 
@@ -117,17 +128,6 @@ proc visitContinueStatement(ctx: Context, node: ContinueStatement): string =
 
 proc visitBreakStatement(ctx: Context, node: BreakStatement): string =
   result = "break"
-
-proc visitFuncStatement(ctx: Context, node: FuncStatement): string =
-  result = fmt"proc {ident(node.name.lexeme)}("
-  for i, arg in node.args:
-    if i != 0: result &= ", "
-    let varPrefix = if arg.mutable: "var " else: ""
-    result &= fmt"{ident(arg.argToken.lexeme)}: {varPrefix}{nimtype(arg.argType)}"
-  result &= ")"
-  if node.returnType.neq(unsetType):
-    result &= fmt": {nimtype(node.returnType)}"
-  result &= fmt" = {ctx.visit(node.funcBlock)}"
   
 proc visitReturnStatement(ctx: Context, node: ReturnStatement): string =
   if node.value == nil:
@@ -149,6 +149,7 @@ proc visit(ctx: Context, node: Expression): string =
   of exprIdent: return visitIdentExpression(ctx, IdentExpression(node))
   of exprCall: return visitCallExpression(ctx, CallExpression(node))
   of exprDeref: return visitDerefExpression(ctx, DerefExpression(node))
+  of exprFunc: return visitFuncExpression(ctx, FuncExpression(node))
   else: discard
 
 proc visit(ctx: Context, node: Statement): string =
@@ -160,7 +161,6 @@ proc visit(ctx: Context, node: Statement): string =
   of stmtWhile: return visitWhileStatement(ctx, WhileStatement(node))
   of stmtContinue: return visitContinueStatement(ctx, ContinueStatement(node))
   of stmtBreak: return visitBreakStatement(ctx, BreakStatement(node))
-  of stmtFunc: return visitFuncStatement(ctx, FuncStatement(node))
   of stmtReturn: return visitReturnStatement(ctx, ReturnStatement(node))
   of stmtCall: return visitCallStatement(ctx, CallStatement(node))
   of stmtRegion: return visitRegionStatement(ctx, RegionStatement(node))

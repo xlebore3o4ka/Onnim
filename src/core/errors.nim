@@ -52,7 +52,7 @@ proc message(kind: ErrorKind): string =
   of errReturnTypeMismatch:      "Function returns @0, got @1"
   of errCallNonFunc:             "Cannot call non-function value of type '@0'"
   of errNoMatchesCallForm:       "No matches found for the expected @0 call form @1, expected one of:\n@2"
-  of errMissingReturn:           "Function '@0' does not return a value on all paths"
+  of errMissingReturn:           "Function @0 does not return a value on all paths"
   of errReturnInsideRegion:      "Return statement is not allowed inside region"
 
   of errExpectedMutable:         "Expression is immutable"
@@ -65,12 +65,12 @@ proc note(kind: ErrorKind): string =
   of errExpectedSyntax:          "The parser expected @0 but found @1. Check the syntax rules for this construct"
   of errExpression:              "The expression containing @0 is not recognized as valid in this context"
   of errStatement:               "The statement containing @0 is not recognized as valid in this context"
-  of errType:                    "The type containing '@0' is not valid in this context"
+  of errType:                    "The type containing '@0' is not valid in this context."
 
   of errUnaryTypeMismatch:       "Unary operator '@0' requires specific operand types. Check the operator's documentation for type requirements"
-  of errBinaryTypeMismatch:      "Binary operator '@0' cannot operate on types '@1' and '@2'. Consider using type conversion"
-  of errDeclarationTypeMismatch: "Declaration of '@1' expects type '@0' but the expression has type '@2'. Change either the type annotation or the expression"
-  of errTypeMismatch:            "Expected type '@0' but found '@1'. Consider using explicit type conversion"
+  of errBinaryTypeMismatch:      "Binary operator '@0' cannot operate on types @1 and @2. Consider using type conversion"
+  of errDeclarationTypeMismatch: "Declaration of '@1' expects type @0 but the expression has type @2. Change either the type annotation or the expression"
+  of errTypeMismatch:            "Expected type @0 but found @1. Consider using explicit type conversion"
   of errRedeclaration:           "Symbol '@0' was already declared at @1(@2:@3). Use a different name or different scope"
   of errUndeclaredSymbol:        "Symbol '@0' is not defined. Check for typos, imports, or declaration order"
 
@@ -78,9 +78,9 @@ proc note(kind: ErrorKind): string =
 
   of errReturnOutsideFunc:       "Return statement appears outside any function. Check function boundaries"
   of errReturnValue:             "Function without return type cannot return a value. Either add a return type or remove the value"
-  of errReturnTypeMismatch:      "Function expects to return '@0' but the expression has type '@1'. Adjust the return expression or function signature"
-  of errCallNonFunc:             "Value of type '@0' is not callable. Only functions and procedures can be called"
-  of errNoMatchesCallForm:       "No overloaded @0 matches the expected call form '@1'. Check the available overloads above"
+  of errReturnTypeMismatch:      "Function expects to return @0 but the expression has type @1. Adjust the return expression or function signature"
+  of errCallNonFunc:             "Value of type @0 is not callable. Only functions and procedures can be called"
+  of errNoMatchesCallForm:       "No overloaded @0 matches the expected call form @1. Check the available overloads above"
   of errMissingReturn:           "Function '@0' may not return a value on all paths. Ensure all branches return a value"
   of errReturnInsideRegion:      "Return statement is not allowed inside region blocks"
 
