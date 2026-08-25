@@ -57,7 +57,7 @@ proc message(kind: ErrorKind): string =
   of errMissingReturn:           "Function @0 does not return a value on all paths"
   of errReturnInsideRegion:      "Return statement is not allowed inside region"
 
-  of errUnsupportedDefinition:   "You can only define comptime or one of [@0] constructs, got @."
+  of errUnsupportedDefinition:   "You can only define comptime or one of <read below> constructs, got @1\n@0"
 
   of errExpectedMutable:         "Expression is immutable"
 
@@ -66,7 +66,7 @@ proc note(kind: ErrorKind): string =
   of errSyntaxChar:              ""
   of errSyntaxParenthesis:       "You missed the opposite side of the bracket ‘@0'"
 
-  of errExpectedSyntax:          "The parser expected @0 but found @1"
+  of errExpectedSyntax:          ""
   of errExpression:              ""
   of errStatement:               ""
   of errType:                    "The parser expected a type, instead of @0"
@@ -88,7 +88,7 @@ proc note(kind: ErrorKind): string =
   of errMissingReturn:           "Check the conditional branches, they may not return a value in some paths"
   of errReturnInsideRegion:      "Return statement is not allowed inside region blocks. Move the return statement to the end of the region statement."
 
-  of errUnsupportedDefinition:   "You can only define a value that is known at the compilation time, or one of the following constructs [@0], but you tried to define @1"
+  of errUnsupportedDefinition:   "You can only define a value that is known at the compilation time, or one of the following constructs <read above>"
 
   of errExpectedMutable:         "Expression is immutable. Declare the symbol as mutable or use a different approach"
 
@@ -98,19 +98,19 @@ proc tip(kind: ErrorKind): string =
   of errSyntaxParenthesis:       "Each open bracket, such as `({[` must be closed with `)}]`"
 
   of errExpectedSyntax:          "Try replacing @0 with @1"
-  of errExpression:              "An expression can be only a type literal (`10`, `true`), a defined identifier (`name`), mathematical calculations (`2 + 3`), etc."
-  of errStatement:               "A statement can only be a symbol declaration (`Int x = 10`, `def func = ...`), a branch (`if cond do ... end`, `while cond do ... end`), " & 
+  of errExpression:              "An expression can be either a literal of a certain type (`10`, `true`), a specific identifier (`name`), mathematical calculations (`2 + 3`), rarely a type or function, etc."
+  of errStatement:               "A statement can only be a symbol declaration (`Int x = 10`, `def func = ...`), a branch (`if expr do ... end`, `while expr do ... end`), " & 
     "flow control (`return ...`, `continue`, `break`), etc."
   of errType:                    "All types are capitalized. Type example: `Int`, `Bool`, `Number(Int a, Int b)`"
 
   of errUnaryTypeMismatch:       "A minus `-` or a plus `+` expects any `Number` after it. A bang `!` expects a `Bool`"
   of errBinaryTypeMismatch:      "Arithmetic operators `+-*/%` expect a `Number` on both sides. Boolean operators expect a `Bool` value"
-  of errDeclarationTypeMismatch: "Try changing your definition to `@2 @0 = ...` or modify the expression so that it returns @1."
+  of errDeclarationTypeMismatch: "Try changing your definition to `@2 @1 = ...` or modify the expression so that it returns @0."
   of errTypeMismatch:            ""
   of errRedeclaration:           "Use a different name or different scope"
   of errUndeclaredSymbol:        "Symbols from libraries should be used with an explicit indication of the source, like `lib.name`"
 
-  of errControlFlowOutsideLoop:  "Create a loop: `while cond do ... end`"
+  of errControlFlowOutsideLoop:  "Create a loop: `while expr do ... end`"
 
   of errReturnOutsideFunc:       "Define your function: `def add = Int(Int a, Int b) do ... end`"
   of errReturnValue:             "Use `return` to terminate the function execution early"
@@ -120,7 +120,7 @@ proc tip(kind: ErrorKind): string =
   of errMissingReturn:           ""
   of errReturnInsideRegion:      ""
 
-  of errUnsupportedDefinition:   ""
+  of errUnsupportedDefinition:   "All types are capitalized. Type example: `Int`, `Bool`, `Number(Int a, Int b)`"
 
   of errExpectedMutable:         "Mutability definition difference: `sym$` - mutable; `sym!` - immutable. Defining a symbol makes it mutable, but function argument symbols are immutable by default"
 
@@ -201,19 +201,23 @@ proc wrapText(text: string, prompt: static[string], maxLen: int = 80): string =
 
   while remaining.len > 0:
     var chunkLen = min(maxLen, remaining.len)
-
-    let backtickPos = remaining.find('`')
-    if backtickPos >= 0 and backtickPos < chunkLen:
-      let closingPos = remaining.find('`', backtickPos + 1)
-      if closingPos >= 0 and closingPos >= chunkLen:
-        chunkLen = closingPos + 1
-
+    
     if chunkLen < remaining.len:
-      let lastSpace = remaining.rfind(' ', 0, chunkLen)
+      let lastSpace = remaining.rfind(' ', 0, chunkLen - 1)
       if lastSpace > 0:
         chunkLen = lastSpace
 
-    let chunk = colorBackticks(remaining[0..<chunkLen])
+    var chunk = remaining[0..<chunkLen]
+    
+    if chunkLen < remaining.len:
+      let openCount = chunk.count('`')
+      if openCount mod 2 == 1:
+        let nextBacktick = remaining.find('`', chunkLen)
+        if nextBacktick != -1:
+          chunkLen = nextBacktick + 1
+          chunk = remaining[0..<chunkLen]
+
+    chunk = colorBackticks(chunk)
     remaining = remaining[chunkLen..^1].strip(leading = true)
 
     if isFirst:

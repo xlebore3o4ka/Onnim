@@ -98,7 +98,7 @@ proc main() =
     checkSemantics(code)
 
     if errors.errors.len != 0: break errorProne
-    let code = generateCode(code)
+    let code = generateCode(code, getAppFilename().absolutePath().parentDir().parentDir() / "src" / "std")
 
     if errors.errors.len != 0: break errorProne
     
@@ -120,7 +120,8 @@ when isMainModule:
   main()
 === Файл: ./src/visitors/semantics.nim ===
 import ../core/[ast, types, tokens, errors]
-import std/[tables, sequtils, strutils, options]
+import std/[tables, sequtils, strutils, strformat, options, macros]
+import builtins
 
 type
   Symbol = object
@@ -145,11 +146,15 @@ type
     expectedReturnType: Type
     expectedRegion: Type
 
-template ident*(name: string): string = "`SYM" & name.replace("_", "_U") & "`"
-template unident*(sym: string): string = sym.strip(chars = {'`'})[3..^1].replace("_U", "_")
+    builtins: Builtins[Symbol]
 
 proc newSymbol(self: Context, name: Token, symbolType: Type, mutable: bool) =
   self.currentScope.symbolTable[name.lexeme] = Symbol(definitionToken: name, symbolType: symbolType, mutable: mutable)
+  self.symbolScopeStack.mgetOrPut(name.lexeme, @[]).add(self.currentScope)
+
+proc newSymbolGet(self: Context, name: Token, symbolType: Type, mutable: bool): Symbol =
+  result = Symbol(definitionToken: name, symbolType: symbolType, mutable: mutable)
+  self.currentScope.symbolTable[name.lexeme] = result
   self.symbolScopeStack.mgetOrPut(name.lexeme, @[]).add(self.currentScope)
 
 proc pushScope(self: Context) =
@@ -181,27 +186,40 @@ proc visit(ctx: Context, node: Statement)
 proc setType(node: Expression, ctx: Context, exprType: Type) {.inline.} =
   node.exprType = exprType
 
-proc isArithmetizable(typ: TypeKind): bool {.inline.} = typ in {typeInt, typePtr}
-proc isArithmetizable(typ: Type):     bool {.inline.} = isArithmetizable(typ.kind)
+macro builtinType(name: untyped): untyped =
+  return quote do:
+    ctx.builtins.`name`.symbolType.baseType
 
-proc isСomparable(typ: TypeKind): bool {.inline.} = typ in {typeInt, typePtr}
-proc isСomparable(typ: Type):     bool {.inline.} = isСomparable(typ.kind)
+proc eq*(ctx: Context, a: Type, b: Type): bool =
+  if types.eq(a, builtinType(Number)) and (
+    types.eq(b, builtinType(Number)) or 
+    types.eq(b, builtinType(Int))
+  ): return true
+  if types.eq(b, builtinType(Number)) and ( 
+    types.eq(a, builtinType(Int))
+  ): return true
+  return types.eq(a, b)
+
+template neq*(ctx: Context, a: Type, b: Type): bool =
+  not ctx.eq(a, b)
 
 proc visitNumberExpression(ctx: Context, node: NumberExpression) =
-  node.setType(ctx, int64Type)
+  node.comptime = true
+  node.setType(ctx, builtinType(Number))
 
 proc visitBoolExpression(ctx: Context, node: BoolExpression) =
-  node.setType(ctx, boolType)
+  node.comptime = true
+  node.setType(ctx, builtinType(Bool))
 
 proc visitUnaryExpression(ctx: Context, node: UnaryExpression) =
   ctx.visit(node.value)
   let op  = node.token.kind
   let typ = node.value.exprType
 
-  if typ.isArithmetizable() and op in {tkPlus, tkMinus}:
+  if ctx.eq(typ, builtinType(Number)) and op in {tkPlus, tkMinus}:
     node.setType(ctx, node.value.exprType)
 
-  elif typ.eq(typeBool) and op == tkBang:
+  elif ctx.eq(typ, builtinType(Bool)) and op == tkBang:
     node.setType(ctx, node.value.exprType)
 
   else:
@@ -210,31 +228,29 @@ proc visitUnaryExpression(ctx: Context, node: UnaryExpression) =
 proc isMutableExpression(ctx: Context, node: Expression): Option[bool] =
   case node.kind:
   of exprIdent:
-    let name = unident(node.token.lexeme)
+    let name = node.token.lexeme
     if not ctx.symbolExists(name): 
       return none(bool)
     let sym = ctx.getSymbol(name)
     return some(sym.mutable and not IdentExpression(node).requireImmutable)
 
   of exprDeref:
-    return some(true)
+    return ctx.isMutableExpression(DerefExpression(node).value)
 
   else:
     return some(false)
+
+template isArithmetizable(typ: Type): bool =
+  ctx.eq(typ, builtinType(Number))
+
+template isСomparable(typ: Type): bool =
+  ctx.eq(typ, builtinType(Number)) or ctx.eq(typ, builtinType(Bool))
 
 proc visitBinaryExpression(ctx: Context, node: BinaryExpression) =
   ctx.visit(node.left)
   ctx.visit(node.right)
 
   block typeSemantics:
-    if not (node.left.exprType.isArithmetizable() and node.right.exprType.isArithmetizable()) and
-       not (node.left.exprType.isСomparable()     and node.right.exprType.isСomparable())     and
-            node.left.exprType.neq(typeRegion)    and
-            node.left.exprType.neq(node.right.exprType):
-
-      newError(errBinaryTypeMismatch, node.token, node.token.lexeme, node.left.exprType, node.right.exprType)
-      break typeSemantics
-
     var typ = node.left.exprType
     let op  = node.token.kind
 
@@ -242,11 +258,11 @@ proc visitBinaryExpression(ctx: Context, node: BinaryExpression) =
       if   typ.isArithmetizable() and op in {tkPlus, tkMinus, tkStar, tkSlash, tkPercent}: 
         break opSemantics
       elif typ.isСomparable() and op in {tkGT, tkLT, tkGTE, tkLTE, tkEqualsEquals, tkBangEquals}: 
-        typ = boolType
+        typ = builtinType(Bool)
         break opSemantics
-      elif typ.eq(boolType) and op in {tkAnd, tkOr, tkEqualsEquals, tkBangEquals}: 
+      elif ctx.eq(typ, builtinType(Bool)) and op in {tkAnd, tkOr, tkEqualsEquals, tkBangEquals}: 
         break opSemantics
-      elif typ.eq(typeRegion) and op == tkAt: 
+      elif eq(typ, typeRegion) and op == tkAt:
         let isMutable = ctx.isMutableExpression(node.left)
         if isMutable.isSome and not isMutable.get():
           newError(errExpectedMutable, node.left.token)
@@ -268,7 +284,7 @@ proc visitIdentExpression(ctx: Context, node: IdentExpression) =
   else:
     node.setType(ctx, ctx.getSymbol(name).symbolType)
     
-  node.token.lexeme = ident(node.token.lexeme)
+  node.token.lexeme = node.token.lexeme
 
 proc toArgTypes(ctx: Context, args: seq[Expression]): seq[ArgType] =
   result = newSeq[ArgType](args.len)
@@ -282,6 +298,15 @@ proc toArgTypes(ctx: Context, args: seq[Expression]): seq[ArgType] =
       mutable: isMutable.get()
     )
 
+proc eq(ctx: Context, a: seq[ArgType], b: seq[ArgType]): bool =
+  if a.len != b.len: return false
+  for n in 0..a.high:
+    let arg_a = a[n]
+    let arg_b = b[n]
+    if not(ctx.eq(arg_a.argType, arg_b.argType) and arg_a.mutable == arg_b.mutable):
+      return false
+  return true
+
 proc visitCallExpression(ctx: Context, node: CallExpression) =
   ctx.visit(node.value)
 
@@ -292,8 +317,6 @@ proc visitCallExpression(ctx: Context, node: CallExpression) =
       newError(errCallNonFunc, node.value.token, valueType)
       break semantics
 
-    # TODO: overrides
-
     let expectedArgTypes = @[valueType]
 
     for arg in node.args:
@@ -301,9 +324,14 @@ proc visitCallExpression(ctx: Context, node: CallExpression) =
 
     let givenArgTypes = ctx.toArgTypes(node.args)
 
-    if givenArgTypes notin expectedArgTypes.mapIt(it.argTypes):
+    var givenArgTypesNotInExpectedArgTypes = true
+    for argTypes in expectedArgTypes.mapIt(it.argTypes):
+      if ctx.eq(givenArgTypes, argTypes): 
+        givenArgTypesNotInExpectedArgTypes = false
+        break
+    if givenArgTypesNotInExpectedArgTypes:
       let funcName = if node.value.kind == exprIdent:
-        "'" & unident(node.value.token.lexeme) & "'"
+        "'" & node.value.token.lexeme & "'"
       else:
         "function"
       
@@ -323,98 +351,6 @@ proc visitDerefExpression(ctx: Context, node: DerefExpression) =
 
   else:
     node.setType(ctx, node.value.exprType.ptrBase)
-
-
-# STATEMENTS
-
-
-proc visitBlockStatement(ctx: Context, node: BlockStatement) =
-  for stmt in node.statements:
-    ctx.visit(stmt)
-
-proc visitDeclarationStatement(ctx: Context, node: DeclarationStatement) =
-  block semantics:
-    ctx.visit(node.value)
-
-    if node.value.exprType.neq node.valueType:
-      newError(errDeclarationTypeMismatch, node.token, node.valueType, node.name.lexeme, node.value.exprType)
-      break semantics
-
-    if ctx.symbolExistsInCurrentScope(node.name.lexeme):
-      let symbol = ctx.getSymbol(node.name.lexeme)
-      let symbolToken = symbol.definitionToken
-      newError(errRedeclaration, node.name, symbolToken.lexeme, symbolToken.file, symbolToken.line, symbolToken.col)
-      break semantics
-
-    ctx.newSymbol(node.name, node.valueType, node.mutable)
-    node.name.lexeme = ident(node.name.lexeme)
-
-proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement) =
-  ctx.visit(node.left)
-  ctx.visit(node.right)
-  
-  block semantics:
-    if node.left.exprType.eq(typeUndefined):
-      break semantics
-
-    var isMutable = ctx.isMutableExpression(node.left)
-    if isMutable.isSome and not isMutable.get():
-      newError(errExpectedMutable, node.left.token)
-      break semantics
-
-    case node.left.kind:
-    of exprIdent, exprDeref:
-      if node.left.exprType.neq node.right.exprType:
-        newError(errTypeMismatch, node.token, node.left.exprType, node.right.exprType)
-
-    else:
-      echo "Unhandled assignment"
-      quit(1)
-
-proc visitBranchingStatement(ctx: Context, node: BranchingStatement) =
-  ctx.visit(node.condition)
-  if node.condition.exprType.neq(boolType):
-    newError(errTypeMismatch, node.condition.token, node.condition.exprType, boolType)
-  
-  else:
-    ctx.pushScope()
-    ctx.visit(node.ifBlock)
-    ctx.popScope()
-  
-  for elifBranch in node.elifBranches:
-    ctx.visit(elifBranch.cond)
-    if elifBranch.cond.exprType.neq(boolType):
-      newError(errTypeMismatch, elifBranch.cond.token, elifBranch.cond.exprType, boolType)
-
-    else:
-      ctx.pushScope()
-      ctx.visit(elifBranch.elifBlock)
-      ctx.popScope()
-  
-  if node.elseBlock != nil:
-    ctx.pushScope()
-    ctx.visit(node.elseBlock)
-    ctx.popScope()
-
-proc visitWhileStatement(ctx: Context, node: WhileStatement) =
-  ctx.visit(node.condition)
-  if node.condition.exprType.neq(boolType):
-    newError(errTypeMismatch, node.condition.token, node.condition.exprType, boolType)
-
-  else:
-    ctx.pushScope()
-    ctx.loopDepth.inc
-    ctx.visit(node.whileBlock)
-    ctx.loopDepth.dec
-    ctx.popScope()
-
-proc visitContinueStatement(ctx: Context, node: ContinueStatement) =
-  if ctx.loopDepth == 0:
-    newError(errControlFlowOutsideLoop, node.token, "continue")
-
-proc visitBreakStatement(ctx: Context, node: BreakStatement) =
-  if ctx.loopDepth == 0:
-    newError(errControlFlowOutsideLoop, node.token, "break")
 
 proc checkReturnPaths(stmt: Statement): bool =
   case stmt.kind:
@@ -447,61 +383,130 @@ proc checkReturnPaths(stmt: Statement): bool =
   else:
     return false
 
-proc toArgTypes*(args: seq[FuncArg]): seq[ArgType] =
-  result = newSeq[ArgType](args.len)
-  for i, arg in args:
-    result[i] = ArgType(
-      name: arg.argToken.lexeme,
-      argType: arg.argType,
-      mutable: arg.mutable
-    )
-
-proc visitFuncStatement(ctx: Context, node: FuncStatement) =
-  if ctx.symbolExistsInCurrentScope(node.name.lexeme):
-    let symbol = ctx.getSymbol(node.name.lexeme)
-    newError(errRedeclaration, node.name, symbol.definitionToken.lexeme, symbol.definitionToken.file, symbol.definitionToken.line, symbol.definitionToken.col)
-    return
-
-  let funcType = getFuncType(node.args.toArgTypes(), node.returnType)
-  ctx.newSymbol(node.name, funcType, false)
-  let name = node.name.lexeme
-  node.name.lexeme = ident(node.name.lexeme)
-
+proc visitFuncExpression(ctx: Context, node: FuncExpression) =
   ctx.pushScope()
   ctx.funcDepth.inc
-  
-  for arg in node.args:
-    ctx.newSymbol(arg.argToken, arg.argType, arg.mutable)
-    arg.argToken.lexeme = ident(arg.argToken.lexeme)
-  
+
   let expected = ctx.expectedReturnType
-  ctx.expectedReturnType = node.returnType
+  ctx.expectedReturnType = node.exprType.returnType
 
-  if not ctx.expectedReturnType.eq(typeUndefined):
+  if not ctx.eq(ctx.expectedReturnType, unsetType):
     if not checkReturnPaths(node.funcBlock):
-      newError(errMissingReturn, node.name, name)
+      newError(errMissingReturn, node.token, node.exprType)
 
+  for arg in node.exprType.argTypes:
+    ctx.newSymbol(copy(node.token, kind = tkIdent, lexeme = arg.name), arg.argType, arg.mutable)
+
+  ctx.pushScope()  # The second level of nesting is needed to allow redefining (shadowing) the arguments
   ctx.visit(node.funcBlock)
+  ctx.popScope()
 
   ctx.expectedReturnType = expected
-  
+
   ctx.funcDepth.dec
   ctx.popScope()
+
+proc visitBlockStatement(ctx: Context, node: BlockStatement) =
+  for stmt in node.statements:
+    ctx.visit(stmt)
+
+proc visitDeclarationStatement(ctx: Context, node: DeclarationStatement) =
+  block semantics:
+    ctx.visit(node.value)
+
+    if ctx.neq(node.value.exprType, node.valueType):
+      newError(errDeclarationTypeMismatch, node.token, node.valueType, node.name.lexeme, node.value.exprType)
+      break semantics
+
+    if ctx.symbolExistsInCurrentScope(node.name.lexeme):
+      let symbol = ctx.getSymbol(node.name.lexeme)
+      let symbolToken = symbol.definitionToken
+      newError(errRedeclaration, node.name, symbolToken.lexeme, symbolToken.file, symbolToken.line, symbolToken.col)
+      break semantics
+
+    ctx.newSymbol(node.name, node.valueType, node.mutable)
+
+proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement) =
+  ctx.visit(node.left)
+  ctx.visit(node.right)
+  
+  block semantics:
+    if node.left.exprType.eq(typeUnset):
+      break semantics
+
+    var isMutable = ctx.isMutableExpression(node.left)
+    if isMutable.isSome and not isMutable.get():
+      newError(errExpectedMutable, node.left.token)
+      break semantics
+
+    case node.left.kind:
+    of exprIdent, exprDeref:
+      if ctx.neq(node.left.exprType, node.right.exprType):
+        newError(errTypeMismatch, node.token, node.left.exprType, node.right.exprType)
+
+    else:
+      echo "Unhandled assignment"
+      quit(1)
+
+proc visitBranchingStatement(ctx: Context, node: BranchingStatement) =
+  ctx.visit(node.condition)
+  if ctx.neq(node.condition.exprType, builtinType(Bool)):
+    newError(errTypeMismatch, node.condition.token, node.condition.exprType, builtinType(Bool))
+  
+  else:
+    ctx.pushScope()
+    ctx.visit(node.ifBlock)
+    ctx.popScope()
+  
+  for elifBranch in node.elifBranches:
+    ctx.visit(elifBranch.cond)
+    if ctx.neq(elifBranch.cond.exprType, builtinType(Bool)):
+      newError(errTypeMismatch, elifBranch.cond.token, elifBranch.cond.exprType, builtinType(Bool))
+
+    else:
+      ctx.pushScope()
+      ctx.visit(elifBranch.elifBlock)
+      ctx.popScope()
+  
+  if node.elseBlock != nil:
+    ctx.pushScope()
+    ctx.visit(node.elseBlock)
+    ctx.popScope()
+
+proc visitWhileStatement(ctx: Context, node: WhileStatement) =
+  ctx.visit(node.condition)
+  if ctx.neq(node.condition.exprType, builtinType(Bool)):
+    newError(errTypeMismatch, node.condition.token, node.condition.exprType, builtinType(Bool))
+
+  else:
+    ctx.pushScope()
+    ctx.loopDepth.inc
+    ctx.visit(node.whileBlock)
+    ctx.loopDepth.dec
+    ctx.popScope()
+
+proc visitContinueStatement(ctx: Context, node: ContinueStatement) =
+  if ctx.loopDepth == 0:
+    newError(errControlFlowOutsideLoop, node.token, "continue")
+
+proc visitBreakStatement(ctx: Context, node: BreakStatement) =
+  if ctx.loopDepth == 0:
+    newError(errControlFlowOutsideLoop, node.token, "break")
 
 proc visitReturnStatement(ctx: Context, node: ReturnStatement) =
   if ctx.funcDepth == 0:
     newError(errReturnOutsideFunc, node.token)
     return
 
-  if ctx.expectedReturnType.eq(typeUndefined):
+  if ctx.expectedReturnType.eq(unsetType):
     if node.value != nil:
       newError(errReturnValue, node.token)
   else:
     if node.value == nil:
-      newError(errReturnTypeMismatch, node.token, ctx.expectedReturnType, undefinedType)
+      newError(errReturnTypeMismatch, node.token, ctx.expectedReturnType, unsetType)
     else:
       ctx.visit(node.value)
-      if node.value.exprType.neq(ctx.expectedReturnType):
+      if ctx.neq(node.value.exprType, ctx.expectedReturnType):
         newError(errReturnTypeMismatch, node.token, ctx.expectedReturnType, node.value.exprType)
 
 proc visitCallStatement(ctx: Context, node: CallStatement) =
@@ -521,13 +526,40 @@ proc visitRegionStatement(ctx: Context, node: RegionStatement) =
 
     ctx.expectedRegion = getRegionType(node.name)
     ctx.newSymbol(node.name, ctx.expectedRegion, true)
-    node.name.lexeme = ident(node.name.lexeme)
 
   ctx.visit(node.regionBlock)
 
   ctx.expectedRegion = temp
   
   ctx.popScope()
+
+proc visitDefStatement(ctx: Context, node: DefStatement) =
+  const specials = {exprFunc, exprKindType}
+
+  block semantics:
+
+    if ctx.symbolExistsInCurrentScope(node.name.lexeme):
+      let symbol = ctx.getSymbol(node.name.lexeme)
+      let symbolToken = symbol.definitionToken
+      newError(errRedeclaration, node.name, symbolToken.lexeme, symbolToken.file, symbolToken.line, symbolToken.col)
+      break semantics
+
+    if node.value.exprType.kind.eq(typeFunc):
+      ctx.newSymbol(node.name, node.value.exprType, false)
+
+    ctx.visit(node.value)
+
+    if node.value.kind notin specials and not node.value.comptime:
+      let constructs = [
+        fmt"{typeFunc} do ... end",
+        fmt"{typeType}"
+      ]
+      newError(errUnsupportedDefinition, node.value.token, constructs.mapIt(fmt"- def {node.name.lexeme} = " & it).join("\n"), node.value.exprType)
+      break semantics
+
+    if node.value.kind notin specials:
+      node.comptime = true
+      ctx.newSymbol(node.name, node.value.exprType, false)
 
 proc visit(ctx: Context, node: Expression) =
   case node.kind:
@@ -538,6 +570,7 @@ proc visit(ctx: Context, node: Expression) =
   of exprIdent: visitIdentExpression(ctx, IdentExpression(node))
   of exprCall: visitCallExpression(ctx, CallExpression(node))
   of exprDeref: visitDerefExpression(ctx, DerefExpression(node))
+  of exprFunc: visitFuncExpression(ctx, FuncExpression(node))
   else: discard
 
 proc visit(ctx: Context, node: Statement) =
@@ -549,14 +582,23 @@ proc visit(ctx: Context, node: Statement) =
   of stmtWhile: visitWhileStatement(ctx, WhileStatement(node))
   of stmtContinue: visitContinueStatement(ctx, ContinueStatement(node))
   of stmtBreak: visitBreakStatement(ctx, BreakStatement(node))
-  of stmtFunc: visitFuncStatement(ctx, FuncStatement(node))
   of stmtReturn: visitReturnStatement(ctx, ReturnStatement(node))
   of stmtCall: visitCallStatement(ctx, CallStatement(node))
+  of stmtDef: visitDefStatement(ctx, DefStatement(node))
   of stmtRegion: visitRegionStatement(ctx, RegionStatement(node))
   else: discard
 
+macro newTypeSymbol(name: untyped): untyped =
+  let strName = $name
+  return quote do:
+    newSymbolGet(ctx, Token(kind: tkType, lexeme: `strName`), getTypeType(getBaseType(`strName`)), false)
+
+macro newSymbol(name: untyped, typ: Type): untyped =
+  let strName = $name
+  return quote do:
+    newSymbolGet(ctx, Token(kind: tkIdent, lexeme: `strName`), `typ`, false)
+
 proc checkSemantics*(node: Statement) =
-  let regionToken = Token(lexeme: "region")
   var ctx = Context(
     currentScope: Scope(
       depth: 0,
@@ -564,15 +606,24 @@ proc checkSemantics*(node: Statement) =
       symbolTable: initTable[string, Symbol]()
     ),
     symbolScopeStack: initTable[string, seq[Scope]](),
-    expectedRegion: getRegionType(regionToken)
   )
-  ctx.newSymbol(regionToken, getRegionType(regionToken), true)
-  ctx.visit(node)
 
+  ctx.builtins = newBuiltins[Symbol](
+    IntSym    = newTypeSymbol(Int),
+    NumberSym = newTypeSymbol(Number),
+    BoolSym   = newTypeSymbol(Bool),
+    wtiteSym  = newSymbol(write, getFuncType(@[ArgType(name: "a", argType: getBaseType("Number"), mutable: false)], unsetType))
+  )
+
+  let regionToken = Token(kind: tkIdent, lexeme: "region")
+  ctx.newSymbol(regionToken, getRegionType(regionToken), true)
+  ctx.expectedRegion = getRegionType(regionToken)
+
+  ctx.visit(node)
 === Файл: ./src/visitors/codegen.nim ===
 import ../core/[ast, types, tokens]
 import std/[strformat, sequtils, strutils, os]
-from semantics import ident
+import builtins
 
 const apiprefix = "onnim"
 
@@ -581,6 +632,7 @@ type
     indent = 0
 
 template indent(ctx: Context): string = "  ".repeat(ctx.indent)
+
 template apicall(name: string, args: varargs[string, `$`], module: string = "", types: seq[string] = @[]): string = 
   apiprefix & (
     if module != "": "_" & module 
@@ -590,21 +642,25 @@ template apicall(name: string, args: varargs[string, `$`], module: string = "", 
     else: ""
   ) & "(" & args.join(", ") & ")"
 
+template ident(name: string): string = "s_" & name.replace("_", "_U")
+
 proc nimtype(t: Type): string =
   case t.kind:
-  of typeInt: return "int"
-  of typeBool: return "bool"
   of typeFunc: 
     var args: string
     for i, argt in t.argTypes:
       if i != 0: args &= ", "
       let isVar = if argt.mutable: " var" else: ""
       args &= fmt"{argt.name}:{isVar} {nimtype(argt.argType)}"
-    if t.returnType.neq(typeUndefined):
-      return fmt"proc ({args}): {t.returnType}"
+    if t.returnType.neq(unsetType):
+      return fmt"proc ({args}): {nimtype(t.returnType)}"
     return fmt"proc ({args})"
   of typePtr:
     return fmt"uint #[ptr {nimtype(t.ptrBase)}]#"
+  of typeBase:
+    return "`" & t.name & "`"
+  of typeType:
+    return nimtype(t.baseType)
   else: 
     echo "Unhandled type: ", t 
     quit(1)
@@ -635,7 +691,7 @@ proc visitBinaryExpression(ctx: Context, node: BinaryExpression): string =
   return fmt"{ctx.visit(node.left)} {op} {ctx.visit(node.right)}"
 
 proc visitIdentExpression(ctx: Context, node: IdentExpression): string =
-  return node.token.lexeme
+  return ident(node.token.lexeme)
 
 proc visitCallExpression(ctx: Context, node: CallExpression): string =
   let fn = ctx.visit(node.value)
@@ -648,6 +704,17 @@ proc visitDerefExpression(ctx: Context, node: DerefExpression): string =
     module = "system", 
     types = @[nimtype(node.value.exprType.ptrBase)]
   )
+
+proc visitFuncExpression(ctx: Context, node: FuncExpression): string =
+  result = fmt"proc ("
+  for i, arg in node.exprType.argTypes:
+    if i != 0: result &= ", "
+    let varPrefix = if arg.mutable: "var " else: ""
+    result &= fmt"{ident(arg.name)}: {varPrefix}{nimtype(arg.argType)}"
+  result &= ")"
+  if node.exprType.returnType.neq(unsetType):
+    result &= fmt": {nimtype(node.exprType.returnType)}"
+  result &= fmt" = {ctx.visit(node.funcBlock)}"
 
 
 # STATEMENTS
@@ -664,7 +731,7 @@ proc visitBlockStatement(ctx: Context, node: BlockStatement): string =
 
 proc visitDeclarationStatement(ctx: Context, node: DeclarationStatement): string =
   let keyword = if node.mutable: "var" else: "let"
-  result = fmt"{keyword} {node.name.lexeme}: {nimtype(node.valueType)} = {ctx.visit(node.value)}"
+  result = fmt"{keyword} {ident(node.name.lexeme)}: {nimtype(node.valueType)} = {ctx.visit(node.value)}"
 
 proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement): string =
   result = fmt"{ctx.visit(node.left)} = {ctx.visit(node.right)}"
@@ -684,17 +751,6 @@ proc visitContinueStatement(ctx: Context, node: ContinueStatement): string =
 
 proc visitBreakStatement(ctx: Context, node: BreakStatement): string =
   result = "break"
-
-proc visitFuncStatement(ctx: Context, node: FuncStatement): string =
-  result = fmt"proc {node.name.lexeme}("
-  for i, arg in node.args:
-    if i != 0: result &= ", "
-    let varPrefix = if arg.mutable: "var " else: ""
-    result &= fmt"{arg.argToken.lexeme}: {varPrefix}{nimtype(arg.argType)}"
-  result &= ")"
-  if node.returnType.neq(typeUndefined):
-    result &= fmt": {nimtype(node.returnType)}"
-  result &= fmt" = {ctx.visit(node.funcBlock)}"
   
 proc visitReturnStatement(ctx: Context, node: ReturnStatement): string =
   if node.value == nil:
@@ -702,10 +758,26 @@ proc visitReturnStatement(ctx: Context, node: ReturnStatement): string =
   result = fmt"return {ctx.visit(node.value)}"
 
 proc visitCallStatement(ctx: Context, node: CallStatement): string =
-  return (if node.expr.exprType.neq(typeUndefined): "discard " else: "") & ctx.visit(node.expr)
+  return (if node.expr.exprType.neq(unsetType): "discard " else: "") & ctx.visit(node.expr)
 
 proc visitRegionStatement(ctx: Context, node: RegionStatement): string =
   return apicall("region", node.name.lexeme, module="system") & ":" & ctx.visit(node.regionBlock)
+
+proc visitDefStatement(ctx: Context, node: DefStatement): string =
+  if node.value.kind == exprFunc:
+    let fn = FuncExpression(node.value)
+    result = "proc " & ident(node.name.lexeme) & "(" 
+    for i, arg in fn.exprType.argTypes:
+      if i != 0: result &= ", "
+      let varPrefix = if arg.mutable: "var " else: ""
+      result &= fmt"{ident(arg.name)}: {varPrefix}{nimtype(arg.argType)}"
+    result &= ")"
+    if fn.exprType.returnType.neq(unsetType):
+      result &= fmt": {nimtype(fn.exprType.returnType)}"
+    result &= fmt" = {ctx.visit(fn.funcBlock)}"
+  elif node.value.kind == exprKindType:
+    let ty = TypeExpression(node.value).exprType
+    result = fmt"type {ident(node.name.lexeme)} = {nimtype(ty)}"
 
 proc visit(ctx: Context, node: Expression): string =
   case node.kind:
@@ -716,6 +788,7 @@ proc visit(ctx: Context, node: Expression): string =
   of exprIdent: return visitIdentExpression(ctx, IdentExpression(node))
   of exprCall: return visitCallExpression(ctx, CallExpression(node))
   of exprDeref: return visitDerefExpression(ctx, DerefExpression(node))
+  of exprFunc: return visitFuncExpression(ctx, FuncExpression(node))
   else: discard
 
 proc visit(ctx: Context, node: Statement): string =
@@ -727,21 +800,66 @@ proc visit(ctx: Context, node: Statement): string =
   of stmtWhile: return visitWhileStatement(ctx, WhileStatement(node))
   of stmtContinue: return visitContinueStatement(ctx, ContinueStatement(node))
   of stmtBreak: return visitBreakStatement(ctx, BreakStatement(node))
-  of stmtFunc: return visitFuncStatement(ctx, FuncStatement(node))
   of stmtReturn: return visitReturnStatement(ctx, ReturnStatement(node))
   of stmtCall: return visitCallStatement(ctx, CallStatement(node))
   of stmtRegion: return visitRegionStatement(ctx, RegionStatement(node))
+  of stmtDef: return visitDefStatement(ctx, DefStatement(node))
   else: discard
 
-proc generateCode*(node: Statement): string =
+proc generateCode*(node: Statement, stdpath: string): string =
   var ctx = Context()
-  result = &"""import {currentSourcePath().absolutePath()}/src/std/[system]
 
-var `SYMregion` = onnim_system_newArena()
+  let builtinsPath = stdpath / "builtins.nim"
+  writeFile(builtinsPath, generateBuiltins())
+  
+  result = &"""import {stdpath}/[system, builtins]
 
-block `transpiled`:""" & ctx.visit(node) & "\n"
+var s_region = onnim_system_newArena()  # DEPRECATED
+
+block transpiled:""" & ctx.visit(node) & "\n"
   ctx.indent.inc
-  result &= ctx.indent() & "quit(0)"
+  result &= ctx.indent()
+=== Файл: ./src/visitors/builtins.nim ===
+import std/[macros, strutils]
+
+macro generateBuiltins*(body: untyped): untyped =
+  var fields = nnkRecList.newTree()
+  var objFields = newStmtList()
+  var params: seq[NimNode] = @[]
+  var strings: seq[string] = @[]
+  
+  for item in body:
+    let name = item[0]
+    let value = item[1]
+    
+    let strValue = value.strVal
+    
+    fields.add(nnkIdentDefs.newTree(nnkPostfix.newTree(ident("*"), name), ident("S"), newEmptyNode()))
+    params.add(ident($name & "Sym"))
+    objFields.add(newAssignment(nnkDotExpr.newTree(ident("result"), name), params[^1]))
+    strings.add(strValue % ["`" & $name & "`"])
+  
+  let body = nnkObjectTy.newTree(newEmptyNode(), newEmptyNode(), fields)
+  let procArgs = nnkArgList.newTree(params)
+  
+  var resultString = strings.join("\n")
+  
+  result = quote do:
+    type Builtins*[S] {.inject.} = ref `body`
+    
+    proc newBuiltins*[S](`procArgs`: S): Builtins[S] =
+      new(result)
+      `objFields`
+
+    proc generateBuiltins*(): string =
+      `resultString`
+
+generateBuiltins:
+  Int    = "type $#* = int"
+  Number = "type $#* = int"
+  Bool   = "type $#* = bool"
+
+  wtite  = "proc s_write*(a: `Number`) = echo a"
 === Файл: ./src/std/system.nim ===
 {.push checks: off.}
 
@@ -791,11 +909,17 @@ macro onnim_system_region*(name: untyped, regionBlock: untyped): untyped =
       onnim_system_killArena(`name`)
 
 {.pop.}
+=== Файл: ./src/std/builtins.nim ===
+type `Int`* = int
+type `Number`* = int
+type `Bool`* = bool
+proc s_write*(a: `Number`) = echo a
 === Файл: ./src/core/ast.nim ===
 import tokens, types
 import std/[macros]
 
 template onnimnode*(kind: untyped) {.pragma.}
+template comptime*() {.pragma.}
 
 
 proc unstar(n: NimNode): NimNode =
@@ -852,7 +976,7 @@ proc makeConstructor(typeName, kindValue, objectTy: NimNode): NimNode =
       ident("exprType"),
       ident("Type"),
       quote do:
-        types.undefinedType
+        types.unsetType
     )
 
     body.add quote do:
@@ -921,33 +1045,25 @@ macro constructors*(body: untyped): untyped =
         objectTy
       )
 
-type
-  FuncArg* = ref object
-    argType*: Type
-    argToken*: Token
-    mutable*: bool
-
-proc add*(arguments: var seq[FuncArg], argType: Type, argToken: Token, mutable: bool) =
-  arguments.add(FuncArg(argType: argType, argToken: argToken, mutable: mutable))
-
 constructors: 
   type
     NodeKind* = enum
       exprInvalid, exprNumber, exprUnary, exprBinary, exprBool, exprIdent,
-      exprCall, exprDeref
+      exprCall, exprDeref, exprKindType, exprFunc
 
       stmtInvalid, stmtBlock, stmtDeclaration, stmtAssignment, stmtBranching
-      stmtWhile, stmtContinue, stmtBreak, stmtFunc, stmtReturn, stmtCall
+      stmtWhile, stmtContinue, stmtBreak, stmtReturn, stmtCall, stmtDef
       stmtRegion
 
     Expression* = ref object of RootObj
       kind*: NodeKind
       token*: Token
       exprType*: Type
+      comptime*: bool
 
     InvalidExpression* {.onnimnode: exprInvalid.} = ref object of Expression
 
-    NumberExpression* {.onnimnode: exprNumber.} = ref object of Expression
+    NumberExpression* {.onnimnode: exprNumber, comptime.} = ref object of Expression
       ## <number>
       ## number = token
 
@@ -962,7 +1078,7 @@ constructors:
       left*: Expression
       right*: Expression
 
-    BoolExpression* {.onnimnode: exprBool.} = ref object of Expression
+    BoolExpression* {.onnimnode: exprBool, comptime.} = ref object of Expression
       ## <bool>
       ## bool = token
 
@@ -982,9 +1098,21 @@ constructors:
       ## "^" = token
       value*: Expression
 
+    TypeExpression* {.onnimnode: exprKindType, comptime.} = ref object of Expression
+      ## <type>
+      ## type = token
+      ## exprType has typeType
+    
+    FuncExpression* {.onnimnode: exprFunc.} = ref object of Expression
+      ## <funcType> <funcBlock>
+      ## do = token
+      ## funcType = exprType
+      funcBlock*: BlockStatement
+
     Statement* = ref object of RootObj
       kind*: NodeKind
       token*: Token
+      comptime*: bool
 
     InvalidStatement* {.onnimnode: stmtInvalid.} = ref object of Statement
 
@@ -1029,14 +1157,6 @@ constructors:
       ## break
       ## break = token
 
-    FuncStatement* {.onnimnode: stmtFunc, deprecated.} = ref object of Statement
-      ## func [type] <name> ( [<args>]* ) <block>
-      ## func = token
-      returnType*: Type
-      name*: Token
-      args*: seq[FuncArg]
-      funcBlock*: BlockStatement
-
     ReturnStatement* {.onnimnode: stmtReturn.} = ref object of Statement
       ## return [value]
       ## return = token
@@ -1046,6 +1166,12 @@ constructors:
       ## <expr>
       ## "(" = token
       expr*: CallExpression
+
+    DefStatement* {.onnimnode: stmtDef.} = ref object of Statement
+      ## def <name> = <value>
+      ## def = token
+      name*: Token
+      value*: Expression
 
     RegionStatement* {.onnimnode: stmtRegion, deprecated.} = ref object of Statement
       ## region <name> <block>
@@ -1058,18 +1184,19 @@ import tokens
 
 type
   TypeKind* = enum
-    typeUndefined {.deprecated.}
 
-    typeInt {.deprecated.}
-
-    typeBool {.deprecated.}
-
-    typeFunc {.deprecated.}
     typePtr {.deprecated.}
 
     typeRegion {.deprecated.}
 
-  ArgType* {.deprecated.} = object
+    typeUnset
+
+    typeBase
+    typeType
+
+    typeFunc
+
+  ArgType* = object
     name*: string
     argType*: Type
     mutable*: bool
@@ -1084,34 +1211,29 @@ type
       ptrRegion*: Type
     of typeRegion:
       regionName*: Token
+    of typeBase:
+      name*: string
+    of typeType:
+      baseType*: Type
     else: discard
 
 let
-  undefinedType* = Type(kind: typeUndefined)
-  int64Type* = Type(kind: typeInt)
-  boolType* = Type(kind: typeBool)
+  unsetType* = Type(kind: typeUnset)
 var
-  funcTypes*: seq[Type]
-  ptrTypes*: seq[Type]
-  regionTypes*: seq[Type]
-
-proc eq*(a: Type, b: Type): bool
-
-proc `==`*(a: ArgType, b: ArgType): bool {.inline.} =
-  return a.argType.eq(b.argType) and a.mutable == b.mutable
-
-proc `==`*(a: seq[ArgType], b: seq[ArgType]): bool {.inline.} =
-  if a.len != b.len: return false
-  for n in 0..a.high:
-    let arg_a = a[n]
-    let arg_b = b[n]
-    if not(arg_a.argType.eq(arg_b.argType) and arg_a.mutable == arg_b.mutable):
-      return false
-  return true
+  funcTypes: seq[Type]
+  ptrTypes: seq[Type]
+  regionTypes: seq[Type]
+  baseTypes: seq[Type]
+  typeTypes: seq[Type]
 
 proc eq*(a: Type, b: Type): bool =
   if a == nil or b == nil: return false
   if a.kind != b.kind: return false
+  if a.kind == typeType: return eq(a.baseType, b)
+  if b.kind == typeType: return eq(a, b.baseType)
+
+  if a.kind == typeBase:
+    return a.name == b.name
 
   if a.kind == typeFunc:
     if a.argTypes.len != b.argTypes.len: return false
@@ -1150,7 +1272,7 @@ proc getFuncType*(argTypes: seq[ArgType], returnType: Type): Type =
   result = Type(kind: typeFunc, argTypes: argTypes, returnType: returnType)
   funcTypes.add(result)
 
-proc getPtrType*(baseType: Type, region: Type): Type =
+proc getPtrType*(baseType: Type, region: Type): Type {.deprecated.} =
   for ptrType in ptrTypes:
     if eq(ptrType.ptrBase, baseType) and eq(ptrType.ptrRegion, region):
       return ptrType
@@ -1158,7 +1280,7 @@ proc getPtrType*(baseType: Type, region: Type): Type =
   result = Type(kind: typePtr, ptrBase: baseType, ptrRegion: region)
   ptrTypes.add(result)
 
-proc getRegionType*(name: Token): Type =
+proc getRegionType*(name: Token): Type {.deprecated.} =
   for regionType in regionTypes:
     if regionType.regionName.lexeme == name.lexeme:
       return regionType
@@ -1166,16 +1288,35 @@ proc getRegionType*(name: Token): Type =
   result = Type(kind: typeRegion, regionName: name)
   regionTypes.add(result)
 
+proc getBaseType*(name: string): Type =
+  for baseType in baseTypes:
+    if baseType.name == name:
+      return baseType
+  
+  result = Type(kind: typeBase, name: name)
+  baseTypes.add(result)
+
+proc getTypeType*(baseType: Type): Type =
+  for typeType in typeTypes:
+    if typeType.baseType == baseType:
+      return typeType
+  
+  result = Type(kind: typeType, baseType: baseType)
+  typeTypes.add(result)
+
 proc `$`*(k: TypeKind): string =
   case k
-  of typeUndefined: "unset"
-  of typeInt:       "int"
-
-  of typeBool:      "bool"
-  of typeFunc:      "T(T args, ...)"
+  
   of typePtr:       "T^R"
 
   of typeRegion:    "region"
+
+  of typeUnset:     "unset"
+
+  of typeBase:      "base-type"
+  of typeType:      "Type"
+
+  of typeFunc:      "T(T args, ...)"
 
 proc `$`*(t: Type): string 
 
@@ -1189,12 +1330,16 @@ proc `$`*(argTypes: seq[ArgType]): string =
 proc `$`*(t: Type): string =
   if t == nil: return "nilType"
   case t.kind
-  of typeFunc:
-    return $t.returnType & $t.argTypes
   of typePtr:
     return $t.ptrBase & "^" & $t.ptrRegion.regionName.lexeme
   of typeRegion:
     return "region '" & $t.regionName.lexeme & "'"
+  of typeBase:
+    return $t.name
+  of typeType:
+    return "Type[" & $t.baseType & "]"
+  of typeFunc:
+    return $t.returnType & $t.argTypes
   else: return $t.kind
 === Файл: ./src/core/parser.nim ===
 import lexer, tokens, errors, ast, types
@@ -1237,19 +1382,18 @@ proc expectToken(self: var Parser, expected: varargs[TokenKind]): Token =
   return token
 
 proc isExpression(self: Parser, token: Token): bool =
-  token.kind in {tkLParen, tkNumber, tkTrue, tkFalse, tkIdent, tkBang, tkMinus, tkPlus}
+  token.kind in {tkLParen, tkNumber, tkTrue, tkFalse, tkIdent, tkBang, tkMinus, tkPlus, tkType}
 
 proc isType(self: Parser, token: Token): bool =
-  token.kind in {tkInt64, tkBool, tkUnder, tkRegion}
+  token.kind in {tkType, tkRegion}
 
 proc parseType(self: var Parser, token: Token): Type =
   case token.kind:
-  of tkInt64: result = int64Type
-  of tkBool: result = boolType
-  of tkUnder: result = undefinedType
+  of tkType: 
+    result = if token.lexeme == "Unset": unsetType else: getBaseType(token.lexeme)
   else:
     newError(errType, token, token.mean)
-    result = undefinedType
+    result = unsetType
 
   while self.peekToken().kind in {tkLParen, tkCaret}:
     let tok = self.nextToken()
@@ -1283,6 +1427,29 @@ proc parseType(self: var Parser, token: Token): Type =
 
 proc parseExpression(self: var Parser): Expression
 
+proc parseStatement(self: var Parser): Statement
+
+proc parseBlock(self: var Parser, endKinds: varargs[TokenKind], consume: bool = true): BlockStatement =
+  discard self.expectToken(tkDo)
+
+  var stmts: seq[Statement]
+  
+  while self.peekToken().kind notin endKinds and self.peekToken().kind != tkEOF:
+    stmts.add(self.parseStatement())
+  
+  let endToken = if consume:
+    self.expectToken(endKinds)
+  else:
+    self.peekToken()
+  
+  result = newBlockStatement(endToken, stmts)
+
+proc parseFuncExpression(self: var Parser, funcType: Type): Expression =
+  let funcToken = self.peekToken()
+  let funcBlock = self.parseBlock(tkEnd)
+  result = newFuncExpression(funcToken, funcBlock)
+  result.exprType = funcType
+
 proc parsePrimary(self: var Parser): Expression =
   let token = self.nextToken()
 
@@ -1303,6 +1470,14 @@ proc parsePrimary(self: var Parser): Expression =
       self.skipToken()
       requireImmutable = true
     return newIdentExpression(token, requireImmutable)
+
+  elif token.kind == tkType:
+    let typ = self.parseType(token)
+    if typ.eq(typeFunc) and self.peekToken().kind == tkDo:
+      return self.parseFuncExpression(typ)
+    result = newTypeExpression(token)
+    result.exprType = getTypeType(typ)
+    return result
 
   self.newError(errExpression, token, token.mean)
   return newInvalidExpression(token)
@@ -1388,8 +1563,6 @@ proc parseAt(self: var Parser): Expression =
 proc parseExpression(self: var Parser): Expression =
   return self.parseAt()
 
-proc parseStatement(self: var Parser): Statement
-
 proc parseDeclaration(self: var Parser): Statement =
   let valueType = self.parseType(self.nextToken())
   let name = self.expectToken(tkIdent)
@@ -1406,21 +1579,6 @@ proc parseDeclaration(self: var Parser): Statement =
   let value = self.parseExpression()
 
   return newDeclarationStatement(token, valueType, name, value, mutable)
-
-proc parseBlock(self: var Parser, endKinds: varargs[TokenKind], consume: bool = true): BlockStatement =
-  discard self.expectToken(tkDo)
-
-  var stmts: seq[Statement]
-  
-  while self.peekToken().kind notin endKinds and self.peekToken().kind != tkEOF:
-    stmts.add(self.parseStatement())
-  
-  let endToken = if consume:
-    self.expectToken(endKinds)
-  else:
-    self.peekToken()
-  
-  result = newBlockStatement(endToken, stmts)
 
 proc parseBranching(self: var Parser): Statement =
   let token = self.nextToken()
@@ -1454,43 +1612,6 @@ proc parseWhile(self: var Parser): Statement =
   
   return newWhileStatement(token, cond, whileBlock)
 
-proc parseFunc(self: var Parser): Statement {.deprecated.} =
-  let token = self.nextToken()
-
-  var funcType = undefinedType
-
-  if self.isType(self.peekToken()):
-    funcType = self.parseType(self.nextToken())
-
-  let name = self.expectToken(tkIdent)
-
-  discard self.expectToken(tkLParen)
-
-  var args: seq[FuncArg]
-
-  while self.peekToken().kind != tkRParen and self.peekToken().kind != tkEOF:
-    let argType = self.parseType(self.nextToken())
-    let name = self.expectToken(tkIdent)
-
-    var mutable = false
-    if self.peekToken().kind == tkDollar:
-      self.skipToken()
-      mutable = true
-    elif self.peekToken().kind == tkBang:
-      self.skipToken()
-      mutable = false
-
-    args.add(argType, name, mutable)
-
-    if self.peekToken().kind == tkRParen: break
-    discard self.expectToken(tkComma)
-
-  discard self.expectToken(tkRParen)
-
-  let funcBlock = self.parseBlock(tkEnd)
-
-  return newFuncStatement(token, funcType, name, args, funcBlock)
-
 proc parseReturn(self: var Parser): Statement =
   let token = self.nextToken()
   var expression: Expression = nil
@@ -1506,6 +1627,14 @@ proc parseRegion(self: var Parser): Statement {.deprecated.} =
   let regionBlock = self.parseBlock(tkEnd)
 
   return newRegionStatement(token, name, regionBlock)
+
+proc parseDef(self: var Parser): Statement =
+  let token = self.nextToken()
+  let name = self.expectToken(tkIdent, tkType)
+  discard self.expectToken(tkEquals)
+  let value = self.parseExpression()
+
+  return newDefStatement(token, name, value)
 
 proc parseStatement(self: var Parser): Statement =
   let token = self.lexer.peekToken()
@@ -1528,11 +1657,11 @@ proc parseStatement(self: var Parser): Statement =
   elif token.kind == tkBreak:
     return newBreakStatement(self.nextToken())
 
-  elif token.kind == tkFunc:
-    return self.parseFunc()
-
   elif token.kind == tkReturn:
     return self.parseReturn()
+
+  elif token.kind == tkDef:
+    return self.parseDef()
 
   elif self.isExpression(token):
     let expr = self.parseExpression()
@@ -1572,6 +1701,8 @@ type
     errReturnOutsideFunc, errReturnValue, errReturnTypeMismatch
     errCallNonFunc, errNoMatchesCallForm, errMissingReturn
     errReturnInsideRegion
+
+    errUnsupportedDefinition
     
     errExpectedMutable
 
@@ -1610,39 +1741,75 @@ proc message(kind: ErrorKind): string =
   of errReturnTypeMismatch:      "Function returns @0, got @1"
   of errCallNonFunc:             "Cannot call non-function value of type '@0'"
   of errNoMatchesCallForm:       "No matches found for the expected @0 call form @1, expected one of:\n@2"
-  of errMissingReturn:           "Function '@0' does not return a value on all paths"
+  of errMissingReturn:           "Function @0 does not return a value on all paths"
   of errReturnInsideRegion:      "Return statement is not allowed inside region"
+
+  of errUnsupportedDefinition:   "You can only define comptime or one of <read below> constructs, got @1\n@0"
 
   of errExpectedMutable:         "Expression is immutable"
 
 proc note(kind: ErrorKind): string =
   case kind:
-  of errSyntaxChar:              "Character '@0' is not supported in this context. Check the language specification for allowed characters"
+  of errSyntaxChar:              ""
   of errSyntaxParenthesis:       "You missed the opposite side of the bracket ‘@0'"
 
-  of errExpectedSyntax:          "The parser expected @0 but found @1. Check the syntax rules for this construct"
-  of errExpression:              "The expression containing @0 is not recognized as valid in this context"
-  of errStatement:               "The statement containing @0 is not recognized as valid in this context"
-  of errType:                    "The type containing '@0' is not valid in this context"
+  of errExpectedSyntax:          ""
+  of errExpression:              ""
+  of errStatement:               ""
+  of errType:                    "The parser expected a type, instead of @0"
 
-  of errUnaryTypeMismatch:       "Unary operator '@0' requires specific operand types. Check the operator's documentation for type requirements"
-  of errBinaryTypeMismatch:      "Binary operator '@0' cannot operate on types '@1' and '@2'. Consider using type conversion"
-  of errDeclarationTypeMismatch: "Declaration of '@1' expects type '@0' but the expression has type '@2'. Change either the type annotation or the expression"
-  of errTypeMismatch:            "Expected type '@0' but found '@1'. Consider using explicit type conversion"
-  of errRedeclaration:           "Symbol '@0' was already declared at @1(@2:@3). Use a different name or different scope"
-  of errUndeclaredSymbol:        "Symbol '@0' is not defined. Check for typos, imports, or declaration order"
+  of errUnaryTypeMismatch:       "Unary operator '@0' requires specific operand types"
+  of errBinaryTypeMismatch:      "Binary operator '@0' cannot operate on types @1 and @2. Consider using type conversion"
+  of errDeclarationTypeMismatch: ""
+  of errTypeMismatch:            ""
+  of errRedeclaration:           ""
+  of errUndeclaredSymbol:        "Symbol '@0' is not defined. Check for typos, modules, or declaration order"
 
-  of errControlFlowOutsideLoop:  "The '@0' statement can only be used inside loops. Move it inside a loop or remove it"
+  of errControlFlowOutsideLoop:  ""
 
-  of errReturnOutsideFunc:       "Return statement appears outside any function. Check function boundaries"
+  of errReturnOutsideFunc:       ""
   of errReturnValue:             "Function without return type cannot return a value. Either add a return type or remove the value"
-  of errReturnTypeMismatch:      "Function expects to return '@0' but the expression has type '@1'. Adjust the return expression or function signature"
-  of errCallNonFunc:             "Value of type '@0' is not callable. Only functions and procedures can be called"
-  of errNoMatchesCallForm:       "No overloaded @0 matches the expected call form '@1'. Check the available overloads above"
-  of errMissingReturn:           "Function '@0' may not return a value on all paths. Ensure all branches return a value"
-  of errReturnInsideRegion:      "Return statement is not allowed inside region blocks"
+  of errReturnTypeMismatch:      ""
+  of errCallNonFunc:             ""
+  of errNoMatchesCallForm:       ""
+  of errMissingReturn:           "Check the conditional branches, they may not return a value in some paths"
+  of errReturnInsideRegion:      "Return statement is not allowed inside region blocks. Move the return statement to the end of the region statement."
 
-  of errExpectedMutable:         "Expression is immutable. Declare the variable as mutable or use a different approach"
+  of errUnsupportedDefinition:   "You can only define a value that is known at the compilation time, or one of the following constructs <read above>"
+
+  of errExpectedMutable:         "Expression is immutable. Declare the symbol as mutable or use a different approach"
+
+proc tip(kind: ErrorKind): string =
+  case kind:
+  of errSyntaxChar:              ""
+  of errSyntaxParenthesis:       "Each open bracket, such as `({[` must be closed with `)}]`"
+
+  of errExpectedSyntax:          "Try replacing @0 with @1"
+  of errExpression:              "An expression can be either a literal of a certain type (`10`, `true`), a specific identifier (`name`), mathematical calculations (`2 + 3`), rarely a type or function, etc."
+  of errStatement:               "A statement can only be a symbol declaration (`Int x = 10`, `def func = ...`), a branch (`if expr do ... end`, `while expr do ... end`), " & 
+    "flow control (`return ...`, `continue`, `break`), etc."
+  of errType:                    "All types are capitalized. Type example: `Int`, `Bool`, `Number(Int a, Int b)`"
+
+  of errUnaryTypeMismatch:       "A minus `-` or a plus `+` expects any `Number` after it. A bang `!` expects a `Bool`"
+  of errBinaryTypeMismatch:      "Arithmetic operators `+-*/%` expect a `Number` on both sides. Boolean operators expect a `Bool` value"
+  of errDeclarationTypeMismatch: "Try changing your definition to `@2 @1 = ...` or modify the expression so that it returns @0."
+  of errTypeMismatch:            ""
+  of errRedeclaration:           "Use a different name or different scope"
+  of errUndeclaredSymbol:        "Symbols from libraries should be used with an explicit indication of the source, like `lib.name`"
+
+  of errControlFlowOutsideLoop:  "Create a loop: `while expr do ... end`"
+
+  of errReturnOutsideFunc:       "Define your function: `def add = Int(Int a, Int b) do ... end`"
+  of errReturnValue:             "Use `return` to terminate the function execution early"
+  of errReturnTypeMismatch:      "If you want the function to return nothing, use `Unset` as the return value."
+  of errCallNonFunc:             "Define your function: `def add = Int(Int a, Int b) do ... end`"
+  of errNoMatchesCallForm:       "Mutability definition difference: `sym$` - mutable; `sym!` - immutable. Defining a symbol makes it mutable, but function argument symbols are immutable by default"
+  of errMissingReturn:           ""
+  of errReturnInsideRegion:      ""
+
+  of errUnsupportedDefinition:   "All types are capitalized. Type example: `Int`, `Bool`, `Number(Int a, Int b)`"
+
+  of errExpectedMutable:         "Mutability definition difference: `sym$` - mutable; `sym!` - immutable. Defining a symbol makes it mutable, but function argument symbols are immutable by default"
 
 proc newError*(kind: ErrorKind, file: string, line, col: Positive, len: Positive, args: varargs[string, `$`]) {.inline.} =
   errors.add(Error(
@@ -1666,13 +1833,17 @@ proc newError*(kind: ErrorKind, token: Token, args: varargs[string, `$`]) {.inli
     message: kind.message
   ))
 
-import std/[strutils, strformat, terminal]
+import std/[strutils, strformat, terminal, tables]
+
+var fileCache: Table[string, seq[string]]
 
 proc getLine(file: string, line: Natural): string {.inline.} =
-  try:
-    readFile(file).splitLines()[line-1]
-  except:
-    "<error reading file>"
+  if file notin fileCache:
+    try:
+      fileCache[file] = readFile(file).splitLines()
+    except:
+      return "<error reading file>"
+  return fileCache[file][line-1]
 
 proc red(text: string): string =
   result = ansiForegroundColorCode(fgRed) & text & ansiResetCode
@@ -1683,33 +1854,61 @@ proc green(text: string): string =
 proc gray(text: string): string =
   result = ansiForegroundColorCode(fgWhite, bright=false) & text & ansiResetCode
 
-proc wrapText(text: string, maxLen: int = 80): string =
+proc cyan(text: string): string =
+  result = ansiForegroundColorCode(fgCyan) & text & ansiResetCode
+
+proc colorBackticks(s: string): string =
+  result = ""
+  var i = 0
+
+  while i < s.len:
+    if s[i] == '`':
+      let closing = s.find('`', i + 1)
+
+      if closing >= 0:
+        result &= cyan(s[i..closing])
+        i = closing + 1
+      else:
+        result &= cyan("`")
+        inc i
+    else:
+      result.add(s[i])
+      inc i
+
+proc wrapText(text: string, prompt: static[string], maxLen: int = 80): string =
   const continuing = "\n  ?  "
-  const prompt = "\n  ? Note:  "
+  const prompt = "\n  ? " & prompt
 
   if text.len <= maxLen:
-    return green(prompt) & text
-  
+    return green(prompt) & colorBackticks(text)
+
   result = ""
   var remaining = text
   var isFirst = true
-  
+
   while remaining.len > 0:
     var chunkLen = min(maxLen, remaining.len)
+
+    let backtickPos = remaining.find('`')
+    if backtickPos >= 0 and backtickPos < chunkLen:
+      let closingPos = remaining.find('`', backtickPos + 1)
+      if closingPos >= 0 and closingPos >= chunkLen:
+        chunkLen = closingPos + 1
+
     if chunkLen < remaining.len:
-      var lastSpace = remaining.rfind(' ', 0, chunkLen)
+      let lastSpace = remaining.rfind(' ', 0, chunkLen)
       if lastSpace > 0:
         chunkLen = lastSpace
-    
-    let chunk = remaining[0..<chunkLen]
-    remaining = remaining[chunkLen..^1].strip(leading=true)
-    
+
+    let chunk = colorBackticks(remaining[0..<chunkLen])
+    remaining = remaining[chunkLen..^1].strip(leading = true)
+
     if isFirst:
-      result &= green(prompt) & continuing & chunk
+      result &= green(prompt & continuing) & chunk
       isFirst = false
     else:
-      result &= continuing & chunk
-  
+      result &= green(continuing) & chunk
+
   return result
 
 proc format*(error: Error, short: bool): string =
@@ -1733,10 +1932,18 @@ proc format*(error: Error, short: bool): string =
     result &= "\n  |  " & before & highlighted & after
 
     var note = error.kind.note()
-    for i, arg in error.args:
-      note = note.replace("@" & $i, arg)
+    if note.len != 0:
+      for i, arg in error.args:
+        note = note.replace("@" & $i, arg)
 
-    result &= wrapText(note)
+      result &= wrapText(note, "Note:  ")
+
+    var tip = error.kind.tip()
+    if tip.len != 0:
+      for i, arg in error.args:
+        tip = tip.replace("@" & $i, arg)
+
+      result &= wrapText(tip, "Tip:   ")
 === Файл: ./src/core/lexer.nim ===
 import tokens, errors
 import std/tables
@@ -1879,13 +2086,12 @@ type
 
     tkLParen, tkRParen
 
-    tkInt64 {.deprecated.}, tkBool {.deprecated.}, tkUnder {.deprecated.}
-
     tkAnd, tkOr, tkTrue, tkFalse
     tkIf, tkElif, tkElse, tkDo, tkEnd
     tkWhile, tkContinue, tkBreak
-    tkFunc {.deprecated.}, tkReturn
+    tkReturn
     tkRegion {.deprecated.}
+    tkDef
 
     tkEOF
     tkInvalid
@@ -1943,11 +2149,6 @@ const rightParenthesis* = block:
 
 const keywordTable* = {
 
-  "int": tkInt64,
-  "int64": tkInt64,
-  "bool": tkBool,
-  "_": tkUnder,
-
   "true": tkTrue,
   "false": tkFalse,
   "and": tkAnd,
@@ -1963,10 +2164,11 @@ const keywordTable* = {
   "continue": tkContinue,
   "break": tkBreak,
 
-  "func": tkFunc,
   "return": tkReturn,
 
-  "region": tkRegion
+  "region": tkRegion,
+
+  "def": tkDef
   
 }.toTable
 
@@ -1991,10 +2193,10 @@ proc mean*(kind: TokenKind): string =
   of tkLT:            return "less than operator '<'"
   of tkGTE:           return "greater or equal operator '>='"
   of tkLTE:           return "less or equal operator '<='"
-  of tkEqualsEquals:  return "equal operator '=='"
-  of tkBangEquals:    return "not equal operator '!='"
-  of tkBang:          return "not operator '!'"
-  of tkEquals:        return "assign operator '='"
+  of tkEqualsEquals:  return "equals-equals operator '=='"
+  of tkBangEquals:    return "bang equal operator '!='"
+  of tkBang:          return "bang operator '!'"
+  of tkEquals:        return "equals operator '='"
   of tkComma:         return "comma operator ','"
   of tkAt:            return "at operator '@'"
   of tkCaret:         return "caret operator '^'"
@@ -2002,10 +2204,6 @@ proc mean*(kind: TokenKind): string =
   
   of tkLParen:        return "left parenthesis '('"
   of tkRParen:        return "right parenthesis ')'"
-
-  of tkInt64:         return "type 'int64'"
-  of tkBool:          return "type 'bool'"
-  of tkUnder:         return "under operator '_'"
   
   of tkAnd:           return "keyword 'and'"
   of tkOr:            return "keyword 'or'"
@@ -2022,10 +2220,11 @@ proc mean*(kind: TokenKind): string =
   of tkContinue:      return "keyword 'continue'"
   of tkBreak:         return "keyword 'break'"
 
-  of tkFunc:          return "keyword 'func'"
   of tkReturn:        return "keyword 'return'"
 
   of tkRegion:        return "keyword 'region'"
+
+  of tkDef:           return "keyword 'def'"
   
   of tkInvalid:       return "invalid token"
   of tkEOF:           return "end of file"

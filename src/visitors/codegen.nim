@@ -29,7 +29,7 @@ proc nimtype(t: Type): string =
       if i != 0: args &= ", "
       let isVar = if argt.mutable: " var" else: ""
       args &= fmt"{argt.name}:{isVar} {nimtype(argt.argType)}"
-    if t.returnType.neq(unsetType):
+    if t.returnType.neq(getUnsetType()):
       return fmt"proc ({args}): {nimtype(t.returnType)}"
     return fmt"proc ({args})"
   of typePtr:
@@ -89,7 +89,7 @@ proc visitFuncExpression(ctx: Context, node: FuncExpression): string =
     let varPrefix = if arg.mutable: "var " else: ""
     result &= fmt"{ident(arg.name)}: {varPrefix}{nimtype(arg.argType)}"
   result &= ")"
-  if node.exprType.returnType.neq(unsetType):
+  if node.exprType.returnType.neq(getUnsetType()):
     result &= fmt": {nimtype(node.exprType.returnType)}"
   result &= fmt" = {ctx.visit(node.funcBlock)}"
 
@@ -135,7 +135,7 @@ proc visitReturnStatement(ctx: Context, node: ReturnStatement): string =
   result = fmt"return {ctx.visit(node.value)}"
 
 proc visitCallStatement(ctx: Context, node: CallStatement): string =
-  return (if node.expr.exprType.neq(unsetType): "discard " else: "") & ctx.visit(node.expr)
+  return (if node.expr.exprType.neq(getUnsetType()): "discard " else: "") & ctx.visit(node.expr)
 
 proc visitRegionStatement(ctx: Context, node: RegionStatement): string =
   return apicall("region", node.name.lexeme, module="system") & ":" & ctx.visit(node.regionBlock)
@@ -149,9 +149,12 @@ proc visitDefStatement(ctx: Context, node: DefStatement): string =
       let varPrefix = if arg.mutable: "var " else: ""
       result &= fmt"{ident(arg.name)}: {varPrefix}{nimtype(arg.argType)}"
     result &= ")"
-    if fn.exprType.returnType.neq(unsetType):
+    if fn.exprType.returnType.neq(getUnsetType()):
       result &= fmt": {nimtype(fn.exprType.returnType)}"
     result &= fmt" = {ctx.visit(fn.funcBlock)}"
+  elif node.value.kind == exprKindType:
+    let ty = TypeExpression(node.value).exprType
+    result = fmt"type `{node.name.lexeme}` = {nimtype(ty)}"
 
 proc visit(ctx: Context, node: Expression): string =
   case node.kind:

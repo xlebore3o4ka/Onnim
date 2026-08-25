@@ -1,5 +1,5 @@
 import ../core/[ast, types, tokens, errors]
-import std/[tables, sequtils, strutils, options, macros]
+import std/[tables, sequtils, strutils, strformat, options, macros]
 import builtins
 
 type
@@ -69,15 +69,51 @@ macro builtinType(name: untyped): untyped =
   return quote do:
     ctx.builtins.`name`.symbolType.baseType
 
+proc unwrapType(ctx: Context, typ: Type): Option[Type] =
+  if typ.kind == typeBase: 
+    if not ctx.symbolExists(typ.name):
+      newError(errUndeclaredSymbol, typ.token, typ.name)
+      return none(Type)
+    let sym = ctx.getSymbol(typ.name)
+    return ctx.unwrapType(sym.symbolType)
+
+  elif typ.kind == typeType:
+    return some(typ.baseType)
+
+  elif typ.kind == typeFunc:
+    var newArgTypes: seq[ArgType]
+    for arg in typ.argTypes:
+      let unwrapped = ctx.unwrapType(arg.argType)
+      if unwrapped.isNone: return none(Type)
+      newArgTypes.add(ArgType(name: arg.name, argType: unwrapped.get(), mutable: arg.mutable))
+    
+    let returnUnwrapped = ctx.unwrapType(typ.returnType)
+    if returnUnwrapped.isNone: return none(Type)
+    
+    return some(getFuncType(newArgTypes, returnUnwrapped.get()))
+
+  else:
+    return none(Type)
+
 proc eq*(ctx: Context, a: Type, b: Type): bool =
-  if types.eq(a, builtinType(Number)) and (
-    types.eq(b, builtinType(Number)) or 
-    types.eq(b, builtinType(Int))
+  var aTypeOption = ctx.unwrapType(a)
+  if not aTypeOption.isSome: return
+  var aType = aTypeOption.get()
+
+  var bTypeOption = ctx.unwrapType(b)
+  if not bTypeOption.isSome: return
+  var bType = bTypeOption.get()
+
+  if types.eq(aType, builtinType(Number)) and (
+    types.eq(bType, builtinType(Number)) or 
+    types.eq(bType, builtinType(Int))
   ): return true
-  if types.eq(b, builtinType(Number)) and ( 
-    types.eq(a, builtinType(Int))
+
+  if types.eq(bType, builtinType(Number)) and ( 
+    types.eq(aType, builtinType(Int))
   ): return true
-  return types.eq(a, b)
+
+  return types.eq(aType, bType)
 
 template neq*(ctx: Context, a: Type, b: Type): bool =
   not ctx.eq(a, b)
@@ -269,7 +305,7 @@ proc visitFuncExpression(ctx: Context, node: FuncExpression) =
   let expected = ctx.expectedReturnType
   ctx.expectedReturnType = node.exprType.returnType
 
-  if not ctx.eq(ctx.expectedReturnType, unsetType):
+  if not ctx.eq(ctx.expectedReturnType, getUnsetType()):
     if not checkReturnPaths(node.funcBlock):
       newError(errMissingReturn, node.token, node.exprType)
 
@@ -377,12 +413,12 @@ proc visitReturnStatement(ctx: Context, node: ReturnStatement) =
     newError(errReturnOutsideFunc, node.token)
     return
 
-  if ctx.expectedReturnType.eq(unsetType):
+  if ctx.expectedReturnType.eq(getUnsetType()):
     if node.value != nil:
       newError(errReturnValue, node.token)
   else:
     if node.value == nil:
-      newError(errReturnTypeMismatch, node.token, ctx.expectedReturnType, unsetType)
+      newError(errReturnTypeMismatch, node.token, ctx.expectedReturnType, getUnsetType())
     else:
       ctx.visit(node.value)
       if ctx.neq(node.value.exprType, ctx.expectedReturnType):
@@ -413,7 +449,7 @@ proc visitRegionStatement(ctx: Context, node: RegionStatement) =
   ctx.popScope()
 
 proc visitDefStatement(ctx: Context, node: DefStatement) =
-  const specials = {exprFunc}
+  const specials = {exprFunc, exprKindType}
 
   block semantics:
 
@@ -427,14 +463,20 @@ proc visitDefStatement(ctx: Context, node: DefStatement) =
       ctx.newSymbol(node.name, node.value.exprType, false)
 
     ctx.visit(node.value)
-    
+
     if node.value.kind notin specials and not node.value.comptime:
-      newError(errUnsupportedDefinition, node.value.token, "`" & $typeFunc & " do ... end`", node.value.exprType)
+      let constructs = [
+        fmt"{typeFunc} do ... end",
+        fmt"{typeType}"
+      ]
+      newError(errUnsupportedDefinition, node.value.token, constructs.mapIt(fmt"- def {node.name.lexeme} = " & it).join("\n"), node.value.exprType)
       break semantics
 
-    if node.value.kind notin specials:
+    if node.value.kind notin specials or node.value.kind == exprKindType:
       node.comptime = true
-      ctx.newSymbol(node.name, node.value.exprType, false)
+      var symType = ctx.unwrapType(node.value.exprType)
+      if symType.isSome:
+        ctx.newSymbol(node.name, symType.get(), false)
 
 proc visit(ctx: Context, node: Expression) =
   case node.kind:
@@ -487,7 +529,7 @@ proc checkSemantics*(node: Statement) =
     IntSym    = newTypeSymbol(Int),
     NumberSym = newTypeSymbol(Number),
     BoolSym   = newTypeSymbol(Bool),
-    wtiteSym  = newSymbol(write, getFuncType(@[ArgType(name: "a", argType: getBaseType("Number"), mutable: false)], unsetType))
+    wtiteSym  = newSymbol(write, getFuncType(@[ArgType(name: "a", argType: getBaseType("Number"), mutable: false)], getUnsetType()))
   )
 
   let regionToken = Token(kind: tkIdent, lexeme: "region")

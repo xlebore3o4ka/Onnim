@@ -46,10 +46,10 @@ proc isType(self: Parser, token: Token): bool =
 proc parseType(self: var Parser, token: Token): Type =
   case token.kind:
   of tkType: 
-    result = if token.lexeme == "Unset": unsetType else: getBaseType(token.lexeme)
+    result = if token.lexeme == "Unset": getUnsetType(token) else: getBaseType(token)
   else:
     newError(errType, token, token.mean)
-    result = unsetType
+    result = getUnsetType(token)
 
   while self.peekToken().kind in {tkLParen, tkCaret}:
     let tok = self.nextToken()
@@ -73,13 +73,13 @@ proc parseType(self: var Parser, token: Token): Type =
         discard self.expectToken(tkComma)
 
       discard self.expectToken(tkRParen)
-      result = getFuncType(argTypes, result)
+      result = getFuncType(token, argTypes, result)
 
     elif tok.kind == tkCaret:
       var region = self.nextToken()
       if region.kind notin {tkRegion, tkIdent}:
         newError(errExpectedSyntax, region, "one of " & tkRegion.mean & ", " & tkIdent.mean, region.kind.mean)
-      result = getPtrType(result, getRegionType(region))
+      result = getPtrType(token, result, getRegionType(token))
 
 proc parseExpression(self: var Parser): Expression
 
@@ -132,7 +132,7 @@ proc parsePrimary(self: var Parser): Expression =
     if typ.eq(typeFunc) and self.peekToken().kind == tkDo:
       return self.parseFuncExpression(typ)
     result = newTypeExpression(token)
-    result.exprType = getTypeType(typ)
+    result.exprType = getTypeType(token, typ)
     return result
 
   self.newError(errExpression, token, token.mean)
@@ -286,7 +286,7 @@ proc parseRegion(self: var Parser): Statement {.deprecated.} =
 
 proc parseDef(self: var Parser): Statement =
   let token = self.nextToken()
-  let name = self.expectToken(tkIdent)
+  let name = self.expectToken(tkIdent, tkType)
   discard self.expectToken(tkEquals)
   let value = self.parseExpression()
 

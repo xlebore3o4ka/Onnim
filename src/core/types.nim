@@ -21,6 +21,7 @@ type
     mutable*: bool
 
   Type* = ref object
+    token*: Token
     case kind*: TypeKind
     of typeFunc:
       argTypes*: seq[ArgType]
@@ -35,15 +36,6 @@ type
     of typeType:
       baseType*: Type
     else: discard
-
-let
-  unsetType* = Type(kind: typeUnset)
-var
-  funcTypes: seq[Type]
-  ptrTypes: seq[Type]
-  regionTypes: seq[Type]
-  baseTypes: seq[Type]
-  typeTypes: seq[Type]
 
 proc eq*(a: Type, b: Type): bool =
   if a == nil or b == nil: return false
@@ -81,47 +73,40 @@ proc eq*(a: TypeKind, b: TypeKind): bool {.inline.} =
 proc neq*(a: Type | TypeKind, b: Type | TypeKind): bool {.inline.} =
   not eq(a, b)
 
-proc getFuncType*(argTypes: seq[ArgType], returnType: Type): Type =
-  for funcType in funcTypes:
-    if funcType.argTypes == argTypes and eq(funcType.returnType, returnType):
-      return funcType
-  
-  result = Type(kind: typeFunc, argTypes: argTypes, returnType: returnType)
-  funcTypes.add(result)
+proc getUnsetType*(): Type {.inline.} =
+  Type(kind: typeUnset)
 
-proc getPtrType*(baseType: Type, region: Type): Type {.deprecated.} =
-  for ptrType in ptrTypes:
-    if eq(ptrType.ptrBase, baseType) and eq(ptrType.ptrRegion, region):
-      return ptrType
-  
-  result = Type(kind: typePtr, ptrBase: baseType, ptrRegion: region)
-  ptrTypes.add(result)
+proc getFuncType*(argTypes: seq[ArgType], returnType: Type): Type {.inline.} =
+  Type(kind: typeFunc, argTypes: argTypes, returnType: returnType)
 
-proc getRegionType*(name: Token): Type {.deprecated.} =
-  for regionType in regionTypes:
-    if regionType.regionName.lexeme == name.lexeme:
-      return regionType
-  
-  result = Type(kind: typeRegion, regionName: name)
-  regionTypes.add(result)
+proc getPtrType*(baseType: Type, region: Type): Type {.deprecated, inline.} =
+  Type(kind: typePtr, ptrBase: baseType, ptrRegion: region)
 
-proc getBaseType*(name: string): Type =
-  for baseType in baseTypes:
-    if baseType.name == name:
-      return baseType
-  
-  result = Type(kind: typeBase, name: name)
-  baseTypes.add(result)
+proc getRegionType*(name: Token): Type {.deprecated, inline.} =
+  Type(kind: typeRegion, regionName: name)
 
-proc getTypeType*(baseType: Type): Type =
-  for typeType in typeTypes:
-    if typeType.baseType == baseType:
-      return typeType
-  
-  result = Type(kind: typeType, baseType: baseType)
-  typeTypes.add(result)
+proc getBaseType*(name: string): Type {.inline.} =
+  Type(kind: typeBase, name: name)
 
-proc `$`*(k: TypeKind): string =
+proc getTypeType*(baseType: Type): Type {.inline.} =
+  Type(kind: typeType, baseType: baseType)
+
+proc getUnsetType*(token: Token): Type {.inline.} =
+  Type(kind: typeUnset, token: token)
+
+proc getFuncType*(token: Token, argTypes: seq[ArgType], returnType: Type): Type {.inline.} =
+  Type(kind: typeFunc, token: token, argTypes: argTypes, returnType: returnType)
+
+proc getPtrType*(token: Token, baseType: Type, region: Type): Type {.deprecated, inline.} =
+  Type(kind: typePtr, token: token, ptrBase: baseType, ptrRegion: region)
+
+proc getBaseType*(token: Token): Type {.inline.} =
+  Type(kind: typeBase, token: token, name: token.lexeme)
+
+proc getTypeType*(token: Token, baseType: Type): Type {.inline.} =
+  Type(kind: typeType, token: token, baseType: baseType)
+
+proc `$`*(k: TypeKind): string {.inline.} =
   case k
   
   of typePtr:       "T^R"

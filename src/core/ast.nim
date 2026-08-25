@@ -59,7 +59,7 @@ proc makeConstructor(typeName, kindValue, objectTy: NimNode): NimNode =
       ident("exprType"),
       ident("Type"),
       quote do:
-        types.unsetType
+        types.getUnsetType()
     )
 
     body.add quote do:
