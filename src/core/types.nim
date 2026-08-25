@@ -4,20 +4,18 @@ import tokens
 type
   TypeKind* = enum
 
-    typeInt {.deprecated.}
-
-    typeBool {.deprecated.}
-
-    typeFunc {.deprecated.}
     typePtr {.deprecated.}
 
     typeRegion {.deprecated.}
 
     typeUnset
+
     typeBase
     typeType
 
-  ArgType* {.deprecated.} = object
+    typeFunc
+
+  ArgType* = object
     name*: string
     argType*: Type
     mutable*: bool
@@ -40,8 +38,6 @@ type
 
 let
   unsetType* = Type(kind: typeUnset)
-  int64Type* {.deprecated.} = Type(kind: typeInt)
-  boolType* {.deprecated.} = Type(kind: typeBool)
 var
   funcTypes: seq[Type]
   ptrTypes: seq[Type]
@@ -51,10 +47,10 @@ var
 
 proc eq*(a: Type, b: Type): bool
 
-proc `==`*(a: ArgType, b: ArgType): bool {.inline, deprecated.} =
+proc `==`*(a: ArgType, b: ArgType): bool {.inline.} =
   return a.argType.eq(b.argType) and a.mutable == b.mutable
 
-proc `==`*(a: seq[ArgType], b: seq[ArgType]): bool {.inline, deprecated.} =
+proc `==`*(a: seq[ArgType], b: seq[ArgType]): bool {.inline.} =
   if a.len != b.len: return false
   for n in 0..a.high:
     let arg_a = a[n]
@@ -99,7 +95,7 @@ proc eq*(a: TypeKind, b: TypeKind): bool {.inline.} =
 proc neq*(a: Type | TypeKind, b: Type | TypeKind): bool {.inline.} =
   not eq(a, b)
 
-proc getFuncType*(argTypes: seq[ArgType], returnType: Type): Type {.deprecated.} =
+proc getFuncType*(argTypes: seq[ArgType], returnType: Type): Type =
   for funcType in funcTypes:
     if funcType.argTypes == argTypes and eq(funcType.returnType, returnType):
       return funcType
@@ -141,21 +137,21 @@ proc getTypeType*(baseType: Type): Type =
 
 proc `$`*(k: TypeKind): string =
   case k
-  of typeUnset:     "unset"
-  of typeInt:       "int"
-
-  of typeBool:      "bool"
-  of typeFunc:      "T(T args, ...)"
+  
   of typePtr:       "T^R"
 
   of typeRegion:    "region"
 
+  of typeUnset:     "unset"
+
   of typeBase:      "base-type"
   of typeType:      "Type"
 
+  of typeFunc:      "T(T args, ...)"
+
 proc `$`*(t: Type): string 
 
-proc `$`*(argTypes: seq[ArgType]): string {.deprecated.} =
+proc `$`*(argTypes: seq[ArgType]): string =
   var args: seq[string]
   for arg in argTypes:
     let mutableSuffix = if arg.mutable: "$" else: "!"
@@ -165,8 +161,6 @@ proc `$`*(argTypes: seq[ArgType]): string {.deprecated.} =
 proc `$`*(t: Type): string =
   if t == nil: return "nilType"
   case t.kind
-  of typeFunc:
-    return $t.returnType & $t.argTypes
   of typePtr:
     return $t.ptrBase & "^" & $t.ptrRegion.regionName.lexeme
   of typeRegion:
@@ -175,4 +169,6 @@ proc `$`*(t: Type): string =
     return $t.name
   of typeType:
     return "Type[" & $t.baseType & "]"
+  of typeFunc:
+    return $t.returnType & $t.argTypes
   else: return $t.kind

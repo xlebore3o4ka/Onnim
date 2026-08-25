@@ -41,14 +41,12 @@ proc isExpression(self: Parser, token: Token): bool =
   token.kind in {tkLParen, tkNumber, tkTrue, tkFalse, tkIdent, tkBang, tkMinus, tkPlus, tkType}
 
 proc isType(self: Parser, token: Token): bool =
-  token.kind in {tkType, tkInt64, tkBool, tkUnder, tkRegion}
+  token.kind in {tkType, tkRegion}
 
 proc parseType(self: var Parser, token: Token): Type =
   case token.kind:
-  of tkType: result = getBaseType(token.lexeme)
-  of tkInt64: result = int64Type
-  of tkBool: result = boolType
-  of tkUnder: result = unsetType
+  of tkType: 
+    result = if token.lexeme == "Unset": unsetType else: getBaseType(token.lexeme)
   else:
     newError(errType, token, token.mean)
     result = unsetType

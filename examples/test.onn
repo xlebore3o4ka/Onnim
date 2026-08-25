@@ -1,8 +1,5 @@
-Int x = 10
-Bool f = false
-
-if x > 5 do
-  f = true
-else do
-  x = 5
+func Number test(Int a, Int b) do
+  return a + b
 end
+
+Number(Int a, Int b) testType = test

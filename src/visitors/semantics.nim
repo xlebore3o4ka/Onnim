@@ -69,25 +69,34 @@ macro builtinType(name: untyped): untyped =
   return quote do:
     ctx.builtins.`name`.symbolType.baseType
 
+proc eq*(ctx: Context, a: Type, b: Type): bool =
+  if types.eq(a, builtinType(Number)) and (
+    types.eq(b, builtinType(Number)) or 
+    types.eq(b, builtinType(Int))
+  ): return true
+  if types.eq(b, builtinType(Number)) and ( 
+    types.eq(a, builtinType(Int))
+  ): return true
+  return types.eq(a, b)
+
+template neq*(ctx: Context, a: Type, b: Type): bool =
+  not ctx.eq(a, b)
+
 proc visitNumberExpression(ctx: Context, node: NumberExpression) =
   node.setType(ctx, builtinType(Number))
 
 proc visitBoolExpression(ctx: Context, node: BoolExpression) =
   node.setType(ctx, builtinType(Bool))
 
-template isNumber(typ: Type): bool =
-  typ.eq(builtinType(Number)) or
-    typ.eq(builtinType(Int))
-
 proc visitUnaryExpression(ctx: Context, node: UnaryExpression) =
   ctx.visit(node.value)
   let op  = node.token.kind
   let typ = node.value.exprType
 
-  if typ.isNumber() and op in {tkPlus, tkMinus}:
+  if ctx.eq(typ, builtinType(Number)) and op in {tkPlus, tkMinus}:
     node.setType(ctx, node.value.exprType)
 
-  elif typ.eq(builtinType(Bool)) and op == tkBang:
+  elif ctx.eq(typ, builtinType(Bool)) and op == tkBang:
     node.setType(ctx, node.value.exprType)
 
   else:
@@ -109,10 +118,10 @@ proc isMutableExpression(ctx: Context, node: Expression): Option[bool] =
     return some(false)
 
 template isArithmetizable(typ: Type): bool =
-  typ.isNumber()
+  ctx.eq(typ, builtinType(Number))
 
 template isСomparable(typ: Type): bool =
-  typ.isNumber() or typ.eq(builtinType(Bool))
+  ctx.eq(typ, builtinType(Number)) or ctx.eq(typ, builtinType(Bool))
 
 proc visitBinaryExpression(ctx: Context, node: BinaryExpression) =
   ctx.visit(node.left)
@@ -128,9 +137,9 @@ proc visitBinaryExpression(ctx: Context, node: BinaryExpression) =
       elif typ.isСomparable() and op in {tkGT, tkLT, tkGTE, tkLTE, tkEqualsEquals, tkBangEquals}: 
         typ = builtinType(Bool)
         break opSemantics
-      elif typ.eq(builtinType(Bool)) and op in {tkAnd, tkOr, tkEqualsEquals, tkBangEquals}: 
+      elif ctx.eq(typ, builtinType(Bool)) and op in {tkAnd, tkOr, tkEqualsEquals, tkBangEquals}: 
         break opSemantics
-      elif typ.eq(typeRegion) and op == tkAt: # DEPRECATED
+      elif eq(typ, typeRegion) and op == tkAt:
         let isMutable = ctx.isMutableExpression(node.left)
         if isMutable.isSome and not isMutable.get():
           newError(errExpectedMutable, node.left.token)
@@ -176,8 +185,6 @@ proc visitCallExpression(ctx: Context, node: CallExpression) =
       newError(errCallNonFunc, node.value.token, valueType)
       break semantics
 
-    # TODO: overrides
-
     let expectedArgTypes = @[valueType]
 
     for arg in node.args:
@@ -208,10 +215,6 @@ proc visitDerefExpression(ctx: Context, node: DerefExpression) =
   else:
     node.setType(ctx, node.value.exprType.ptrBase)
 
-
-# STATEMENTS
-
-
 proc visitBlockStatement(ctx: Context, node: BlockStatement) =
   for stmt in node.statements:
     ctx.visit(stmt)
@@ -220,8 +223,7 @@ proc visitDeclarationStatement(ctx: Context, node: DeclarationStatement) =
   block semantics:
     ctx.visit(node.value)
 
-    if node.value.exprType.neq(node.valueType) and 
-      not (node.valueType.isNumber() and node.value.exprType.eq(builtinType(Number))):
+    if ctx.neq(node.value.exprType, node.valueType):
       newError(errDeclarationTypeMismatch, node.token, node.valueType, node.name.lexeme, node.value.exprType)
       break semantics
 
@@ -248,8 +250,7 @@ proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement) =
 
     case node.left.kind:
     of exprIdent, exprDeref:
-      if node.left.exprType.neq(node.right.exprType) and 
-        not (node.left.exprType.isNumber() and node.right.exprType.eq(builtinType(Number))):
+      if ctx.neq(node.left.exprType, node.right.exprType):
         newError(errTypeMismatch, node.token, node.left.exprType, node.right.exprType)
 
     else:
@@ -258,7 +259,7 @@ proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement) =
 
 proc visitBranchingStatement(ctx: Context, node: BranchingStatement) =
   ctx.visit(node.condition)
-  if node.condition.exprType.neq(builtinType(Bool)):
+  if ctx.neq(node.condition.exprType, builtinType(Bool)):
     newError(errTypeMismatch, node.condition.token, node.condition.exprType, builtinType(Bool))
   
   else:
@@ -268,7 +269,7 @@ proc visitBranchingStatement(ctx: Context, node: BranchingStatement) =
   
   for elifBranch in node.elifBranches:
     ctx.visit(elifBranch.cond)
-    if elifBranch.cond.exprType.neq(builtinType(Bool)):
+    if ctx.neq(elifBranch.cond.exprType, builtinType(Bool)):
       newError(errTypeMismatch, elifBranch.cond.token, elifBranch.cond.exprType, builtinType(Bool))
 
     else:
@@ -283,7 +284,7 @@ proc visitBranchingStatement(ctx: Context, node: BranchingStatement) =
 
 proc visitWhileStatement(ctx: Context, node: WhileStatement) =
   ctx.visit(node.condition)
-  if node.condition.exprType.neq(builtinType(Bool)):
+  if ctx.neq(node.condition.exprType, builtinType(Bool)):
     newError(errTypeMismatch, node.condition.token, node.condition.exprType, builtinType(Bool))
 
   else:
@@ -360,7 +361,7 @@ proc visitFuncStatement(ctx: Context, node: FuncStatement) =
   let expected = ctx.expectedReturnType
   ctx.expectedReturnType = node.returnType
 
-  if not ctx.expectedReturnType.eq(unsetType):
+  if not ctx.eq(ctx.expectedReturnType, unsetType):
     if not checkReturnPaths(node.funcBlock):
       newError(errMissingReturn, node.name, name)
 
@@ -384,7 +385,7 @@ proc visitReturnStatement(ctx: Context, node: ReturnStatement) =
       newError(errReturnTypeMismatch, node.token, ctx.expectedReturnType, unsetType)
     else:
       ctx.visit(node.value)
-      if node.value.exprType.neq(ctx.expectedReturnType):
+      if ctx.neq(node.value.exprType, ctx.expectedReturnType):
         newError(errReturnTypeMismatch, node.token, ctx.expectedReturnType, node.value.exprType)
 
 proc visitCallStatement(ctx: Context, node: CallStatement) =

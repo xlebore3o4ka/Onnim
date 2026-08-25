@@ -23,8 +23,6 @@ template ident(name: string): string = "s_" & name.replace("_", "_U")
 
 proc nimtype(t: Type): string =
   case t.kind:
-  of typeInt: return "int"
-  of typeBool: return "bool"
   of typeFunc: 
     var args: string
     for i, argt in t.argTypes:
@@ -32,7 +30,7 @@ proc nimtype(t: Type): string =
       let isVar = if argt.mutable: " var" else: ""
       args &= fmt"{argt.name}:{isVar} {nimtype(argt.argType)}"
     if t.returnType.neq(unsetType):
-      return fmt"proc ({args}): {t.returnType}"
+      return fmt"proc ({args}): {nimtype(t.returnType)}"
     return fmt"proc ({args})"
   of typePtr:
     return fmt"uint #[ptr {nimtype(t.ptrBase)}]#"
