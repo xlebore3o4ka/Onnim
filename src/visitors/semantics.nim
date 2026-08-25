@@ -83,9 +83,11 @@ template neq*(ctx: Context, a: Type, b: Type): bool =
   not ctx.eq(a, b)
 
 proc visitNumberExpression(ctx: Context, node: NumberExpression) =
+  node.comptime = true
   node.setType(ctx, builtinType(Number))
 
 proc visitBoolExpression(ctx: Context, node: BoolExpression) =
+  node.comptime = true
   node.setType(ctx, builtinType(Bool))
 
 proc visitUnaryExpression(ctx: Context, node: UnaryExpression) =
@@ -175,6 +177,15 @@ proc toArgTypes(ctx: Context, args: seq[Expression]): seq[ArgType] =
       mutable: isMutable.get()
     )
 
+proc eq(ctx: Context, a: seq[ArgType], b: seq[ArgType]): bool =
+  if a.len != b.len: return false
+  for n in 0..a.high:
+    let arg_a = a[n]
+    let arg_b = b[n]
+    if not(ctx.eq(arg_a.argType, arg_b.argType) and arg_a.mutable == arg_b.mutable):
+      return false
+  return true
+
 proc visitCallExpression(ctx: Context, node: CallExpression) =
   ctx.visit(node.value)
 
@@ -192,7 +203,12 @@ proc visitCallExpression(ctx: Context, node: CallExpression) =
 
     let givenArgTypes = ctx.toArgTypes(node.args)
 
-    if givenArgTypes notin expectedArgTypes.mapIt(it.argTypes):
+    var givenArgTypesNotInExpectedArgTypes = true
+    for argTypes in expectedArgTypes.mapIt(it.argTypes):
+      if ctx.eq(givenArgTypes, argTypes): 
+        givenArgTypesNotInExpectedArgTypes = false
+        break
+    if givenArgTypesNotInExpectedArgTypes:
       let funcName = if node.value.kind == exprIdent:
         "'" & node.value.token.lexeme & "'"
       else:
@@ -397,11 +413,28 @@ proc visitRegionStatement(ctx: Context, node: RegionStatement) =
   ctx.popScope()
 
 proc visitDefStatement(ctx: Context, node: DefStatement) =
-  ctx.visit(node.value)
+  const specials = {exprFunc}
 
   block semantics:
-    if node.value.kind notin {exprFunc} and not node.value.comptime:
-      newError(errUnsupportedDefinition, node.value.token, $typeFunc & " do ... end", node.value.exprType)
+
+    if ctx.symbolExistsInCurrentScope(node.name.lexeme):
+      let symbol = ctx.getSymbol(node.name.lexeme)
+      let symbolToken = symbol.definitionToken
+      newError(errRedeclaration, node.name, symbolToken.lexeme, symbolToken.file, symbolToken.line, symbolToken.col)
+      break semantics
+
+    if node.value.exprType.kind.eq(typeFunc):
+      ctx.newSymbol(node.name, node.value.exprType, false)
+
+    ctx.visit(node.value)
+    
+    if node.value.kind notin specials and not node.value.comptime:
+      newError(errUnsupportedDefinition, node.value.token, "`" & $typeFunc & " do ... end`", node.value.exprType)
+      break semantics
+
+    if node.value.kind notin specials:
+      node.comptime = true
+      ctx.newSymbol(node.name, node.value.exprType, false)
 
 proc visit(ctx: Context, node: Expression) =
   case node.kind:
@@ -435,6 +468,11 @@ macro newTypeSymbol(name: untyped): untyped =
   return quote do:
     newSymbolGet(ctx, Token(kind: tkType, lexeme: `strName`), getTypeType(getBaseType(`strName`)), false)
 
+macro newSymbol(name: untyped, typ: Type): untyped =
+  let strName = $name
+  return quote do:
+    newSymbolGet(ctx, Token(kind: tkIdent, lexeme: `strName`), `typ`, false)
+
 proc checkSemantics*(node: Statement) =
   var ctx = Context(
     currentScope: Scope(
@@ -448,7 +486,8 @@ proc checkSemantics*(node: Statement) =
   ctx.builtins = newBuiltins[Symbol](
     IntSym    = newTypeSymbol(Int),
     NumberSym = newTypeSymbol(Number),
-    BoolSym   = newTypeSymbol(Bool)
+    BoolSym   = newTypeSymbol(Bool),
+    wtiteSym  = newSymbol(write, getFuncType(@[ArgType(name: "a", argType: getBaseType("Number"), mutable: false)], unsetType))
   )
 
   let regionToken = Token(kind: tkIdent, lexeme: "region")

@@ -140,6 +140,19 @@ proc visitCallStatement(ctx: Context, node: CallStatement): string =
 proc visitRegionStatement(ctx: Context, node: RegionStatement): string =
   return apicall("region", node.name.lexeme, module="system") & ":" & ctx.visit(node.regionBlock)
 
+proc visitDefStatement(ctx: Context, node: DefStatement): string =
+  if node.value.kind == exprFunc:
+    let fn = FuncExpression(node.value)
+    result = "proc " & ident(node.name.lexeme) & "(" 
+    for i, arg in fn.exprType.argTypes:
+      if i != 0: result &= ", "
+      let varPrefix = if arg.mutable: "var " else: ""
+      result &= fmt"{ident(arg.name)}: {varPrefix}{nimtype(arg.argType)}"
+    result &= ")"
+    if fn.exprType.returnType.neq(unsetType):
+      result &= fmt": {nimtype(fn.exprType.returnType)}"
+    result &= fmt" = {ctx.visit(fn.funcBlock)}"
+
 proc visit(ctx: Context, node: Expression): string =
   case node.kind:
   of exprNumber: return visitNumberExpression(ctx, NumberExpression(node))
@@ -164,6 +177,7 @@ proc visit(ctx: Context, node: Statement): string =
   of stmtReturn: return visitReturnStatement(ctx, ReturnStatement(node))
   of stmtCall: return visitCallStatement(ctx, CallStatement(node))
   of stmtRegion: return visitRegionStatement(ctx, RegionStatement(node))
+  of stmtDef: return visitDefStatement(ctx, DefStatement(node))
   else: discard
 
 proc generateCode*(node: Statement, stdpath: string): string =

@@ -45,20 +45,6 @@ var
   baseTypes: seq[Type]
   typeTypes: seq[Type]
 
-proc eq*(a: Type, b: Type): bool
-
-proc `==`*(a: ArgType, b: ArgType): bool {.inline.} =
-  return a.argType.eq(b.argType) and a.mutable == b.mutable
-
-proc `==`*(a: seq[ArgType], b: seq[ArgType]): bool {.inline.} =
-  if a.len != b.len: return false
-  for n in 0..a.high:
-    let arg_a = a[n]
-    let arg_b = b[n]
-    if not(arg_a.argType.eq(arg_b.argType) and arg_a.mutable == arg_b.mutable):
-      return false
-  return true
-
 proc eq*(a: Type, b: Type): bool =
   if a == nil or b == nil: return false
   if a.kind != b.kind: return false

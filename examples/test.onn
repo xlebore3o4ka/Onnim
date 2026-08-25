@@ -1,1 +1,12 @@
-10()
+region r do
+    Number^r counter$ = r @ 0
+    
+    def increment = Number(Number^r c$) do
+        c^ = c^ + 1
+        return c!^
+    end
+    
+    write(increment(counter)) 
+    write(incrment(counter)) 
+    write(increment(counter))
+end

@@ -15,7 +15,7 @@ type
     tkAnd, tkOr, tkTrue, tkFalse
     tkIf, tkElif, tkElse, tkDo, tkEnd
     tkWhile, tkContinue, tkBreak
-    tkFunc {.deprecated.}, tkReturn
+    tkReturn
     tkRegion {.deprecated.}
     tkDef
 
@@ -90,7 +90,6 @@ const keywordTable* = {
   "continue": tkContinue,
   "break": tkBreak,
 
-  "func": tkFunc,
   "return": tkReturn,
 
   "region": tkRegion,
@@ -120,10 +119,10 @@ proc mean*(kind: TokenKind): string =
   of tkLT:            return "less than operator '<'"
   of tkGTE:           return "greater or equal operator '>='"
   of tkLTE:           return "less or equal operator '<='"
-  of tkEqualsEquals:  return "equal operator '=='"
-  of tkBangEquals:    return "not equal operator '!='"
-  of tkBang:          return "not operator '!'"
-  of tkEquals:        return "assign operator '='"
+  of tkEqualsEquals:  return "equals-equals operator '=='"
+  of tkBangEquals:    return "bang equal operator '!='"
+  of tkBang:          return "bang operator '!'"
+  of tkEquals:        return "equals operator '='"
   of tkComma:         return "comma operator ','"
   of tkAt:            return "at operator '@'"
   of tkCaret:         return "caret operator '^'"
@@ -147,7 +146,6 @@ proc mean*(kind: TokenKind): string =
   of tkContinue:      return "keyword 'continue'"
   of tkBreak:         return "keyword 'break'"
 
-  of tkFunc:          return "keyword 'func'"
   of tkReturn:        return "keyword 'return'"
 
   of tkRegion:        return "keyword 'region'"

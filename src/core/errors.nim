@@ -63,37 +63,66 @@ proc message(kind: ErrorKind): string =
 
 proc note(kind: ErrorKind): string =
   case kind:
-  of errSyntaxChar:              "Character '@0' is not supported in this context. Check the language specification for allowed characters"
+  of errSyntaxChar:              ""
   of errSyntaxParenthesis:       "You missed the opposite side of the bracket ‘@0'"
 
-  of errExpectedSyntax:          "The parser expected @0 but found @1. Check the syntax rules for this construct"
-  of errExpression:              "The expression containing @0 is not recognized as valid in this context"
-  of errStatement:               "The statement containing @0 is not recognized as valid in this context"
-  of errType:                    "The type containing '@0' is not valid in this context. Tip: All types are capitalized"
+  of errExpectedSyntax:          "The parser expected @0 but found @1"
+  of errExpression:              ""
+  of errStatement:               ""
+  of errType:                    "The parser expected a type, instead of @0"
 
-  of errUnaryTypeMismatch:       "Unary operator '@0' requires specific operand types. Convert types: `expr -> T`. Tip: All types are capitalized"
-  of errBinaryTypeMismatch:      "Binary operator '@0' cannot operate on types @1 and @2. Consider using type conversion. Convert types: `expr -> T`. Tip: All types are capitalized"
-  of errDeclarationTypeMismatch: "Declaration of '@1' expects type @0 but the expression has type @2. Change either the type annotation or the expression. " & 
-    "Convert types: `expr -> T`. Tip: All types are capitalized"
-  of errTypeMismatch:            "Expected type @0 but found @1. Consider using explicit type conversion. Convert types: `expr -> T`. Tip: All types are capitalized"
-  of errRedeclaration:           "Symbol '@0' was already declared at @1(@2:@3). Use a different name or different scope"
-  of errUndeclaredSymbol:        "Symbol '@0' is not defined. Check for typos, imports, or declaration order"
+  of errUnaryTypeMismatch:       "Unary operator '@0' requires specific operand types"
+  of errBinaryTypeMismatch:      "Binary operator '@0' cannot operate on types @1 and @2. Consider using type conversion"
+  of errDeclarationTypeMismatch: ""
+  of errTypeMismatch:            ""
+  of errRedeclaration:           ""
+  of errUndeclaredSymbol:        "Symbol '@0' is not defined. Check for typos, modules, or declaration order"
 
-  of errControlFlowOutsideLoop:  "The '@0' statement can only be used inside loops. Move it inside a loop or remove it"
+  of errControlFlowOutsideLoop:  ""
 
-  of errReturnOutsideFunc:       "Return statement appears outside any function. Define your function: `def name = Int(Int arg) do ... end`"
+  of errReturnOutsideFunc:       ""
   of errReturnValue:             "Function without return type cannot return a value. Either add a return type or remove the value"
-  of errReturnTypeMismatch:      "Function expects to return @0 but the expression has type @1. Adjust the return expression or function signature"
-  of errCallNonFunc:             "Only functions can be called. Define your function: `def name = Int(Int arg) do ... end`"
-  of errNoMatchesCallForm:       "The arguments of the called @0 do not match any available overload. Find the required overload above"
-  of errMissingReturn:           "Function '@0' may not return a value on all paths. Ensure all branches return a value"
+  of errReturnTypeMismatch:      ""
+  of errCallNonFunc:             ""
+  of errNoMatchesCallForm:       ""
+  of errMissingReturn:           "Check the conditional branches, they may not return a value in some paths"
   of errReturnInsideRegion:      "Return statement is not allowed inside region blocks. Move the return statement to the end of the region statement."
 
-  of errUnsupportedDefinition:   "You can only define a value that is known at the compilation time, or one of the following constructs [@0], but you tried to define @1. " &
-    "Make sure that the value you defined is in this list or is a compile‑time constant"
+  of errUnsupportedDefinition:   "You can only define a value that is known at the compilation time, or one of the following constructs [@0], but you tried to define @1"
 
-  of errExpectedMutable:         "Expression is immutable. Declare the symbol as mutable or use a different approach. Definition difference: `sym$` - mutable; `sym!` - immutable. " &
-    "Defining a symbol makes it mutable, but function argument symbols are immutable by default."
+  of errExpectedMutable:         "Expression is immutable. Declare the symbol as mutable or use a different approach"
+
+proc tip(kind: ErrorKind): string =
+  case kind:
+  of errSyntaxChar:              ""
+  of errSyntaxParenthesis:       "Each open bracket, such as `({[` must be closed with `)}]`"
+
+  of errExpectedSyntax:          "Try replacing @0 with @1"
+  of errExpression:              "An expression can be only a type literal (`10`, `true`), a defined identifier (`name`), mathematical calculations (`2 + 3`), etc."
+  of errStatement:               "A statement can only be a symbol declaration (`Int x = 10`, `def func = ...`), a branch (`if cond do ... end`, `while cond do ... end`), " & 
+    "flow control (`return ...`, `continue`, `break`), etc."
+  of errType:                    "All types are capitalized. Type example: `Int`, `Bool`, `Number(Int a, Int b)`"
+
+  of errUnaryTypeMismatch:       "A minus `-` or a plus `+` expects any `Number` after it. A bang `!` expects a `Bool`"
+  of errBinaryTypeMismatch:      "Arithmetic operators `+-*/%` expect a `Number` on both sides. Boolean operators expect a `Bool` value"
+  of errDeclarationTypeMismatch: "Try changing your definition to `@2 @0 = ...` or modify the expression so that it returns @1."
+  of errTypeMismatch:            ""
+  of errRedeclaration:           "Use a different name or different scope"
+  of errUndeclaredSymbol:        "Symbols from libraries should be used with an explicit indication of the source, like `lib.name`"
+
+  of errControlFlowOutsideLoop:  "Create a loop: `while cond do ... end`"
+
+  of errReturnOutsideFunc:       "Define your function: `def add = Int(Int a, Int b) do ... end`"
+  of errReturnValue:             "Use `return` to terminate the function execution early"
+  of errReturnTypeMismatch:      "If you want the function to return nothing, use `Unset` as the return value."
+  of errCallNonFunc:             "Define your function: `def add = Int(Int a, Int b) do ... end`"
+  of errNoMatchesCallForm:       "Mutability definition difference: `sym$` - mutable; `sym!` - immutable. Defining a symbol makes it mutable, but function argument symbols are immutable by default"
+  of errMissingReturn:           ""
+  of errReturnInsideRegion:      ""
+
+  of errUnsupportedDefinition:   ""
+
+  of errExpectedMutable:         "Mutability definition difference: `sym$` - mutable; `sym!` - immutable. Defining a symbol makes it mutable, but function argument symbols are immutable by default"
 
 proc newError*(kind: ErrorKind, file: string, line, col: Positive, len: Positive, args: varargs[string, `$`]) {.inline.} =
   errors.add(Error(
@@ -117,13 +146,17 @@ proc newError*(kind: ErrorKind, token: Token, args: varargs[string, `$`]) {.inli
     message: kind.message
   ))
 
-import std/[strutils, strformat, terminal]
+import std/[strutils, strformat, terminal, tables]
+
+var fileCache: Table[string, seq[string]]
 
 proc getLine(file: string, line: Natural): string {.inline.} =
-  try:
-    readFile(file).splitLines()[line-1]
-  except:
-    "<error reading file>"
+  if file notin fileCache:
+    try:
+      fileCache[file] = readFile(file).splitLines()
+    except:
+      return "<error reading file>"
+  return fileCache[file][line-1]
 
 proc red(text: string): string =
   result = ansiForegroundColorCode(fgRed) & text & ansiResetCode
@@ -155,9 +188,9 @@ proc colorBackticks(s: string): string =
       result.add(s[i])
       inc i
 
-proc wrapText(text: string, maxLen: int = 80): string =
+proc wrapText(text: string, prompt: static[string], maxLen: int = 80): string =
   const continuing = "\n  ?  "
-  const prompt = "\n  ? Note:  "
+  const prompt = "\n  ? " & prompt
 
   if text.len <= maxLen:
     return green(prompt) & colorBackticks(text)
@@ -212,7 +245,15 @@ proc format*(error: Error, short: bool): string =
     result &= "\n  |  " & before & highlighted & after
 
     var note = error.kind.note()
-    for i, arg in error.args:
-      note = note.replace("@" & $i, arg)
+    if note.len != 0:
+      for i, arg in error.args:
+        note = note.replace("@" & $i, arg)
 
-    result &= wrapText(note)
+      result &= wrapText(note, "Note:  ")
+
+    var tip = error.kind.tip()
+    if tip.len != 0:
+      for i, arg in error.args:
+        tip = tip.replace("@" & $i, arg)
+
+      result &= wrapText(tip, "Tip:   ")

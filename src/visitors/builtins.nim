@@ -36,3 +36,5 @@ generateBuiltins:
   Int    = "type $#* = int"
   Number = "type $#* = int"
   Bool   = "type $#* = bool"
+
+  wtite  = "proc s_write*(a: `Number`) = echo a"
