@@ -6,12 +6,14 @@ proc main() =
   var
     filename: string
     shorterrors: bool = false
+    locale: string = "en"
 
   for kind, key, val in getopt():
     case kind
     of cmdLongOption, cmdShortOption:
       case key
       of "shorterrors", "s": shorterrors = true
+      of "locale", "l": locale = val
       else: discard
     of cmdArgument:
       if filename == "": filename = key
@@ -29,13 +31,14 @@ proc main() =
   var parser = newParser(content, filename)
 
   let code = parser.parse()
+  let stdpath = getAppFilename().absolutePath().parentDir().parentDir() / "src" / "std"
 
   block errorProne:
     if errors.errors.len != 0: break errorProne
     checkSemantics(code)
 
     if errors.errors.len != 0: break errorProne
-    let code = generateCode(code, getAppFilename().absolutePath().parentDir().parentDir() / "src" / "std")
+    let code = generateCode(code, stdpath)
 
     if errors.errors.len != 0: break errorProne
     
@@ -50,6 +53,7 @@ proc main() =
       echo "Compilation failed [" & nimCmd & "]"
 
   if errors.errors.len != 0:
+    loadErrorMessages(stdpath / "errors" / locale & ".json")
     for e in errors.errors:
       stderr.writeLine(e.format(shorterrors))
 

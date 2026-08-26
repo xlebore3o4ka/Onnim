@@ -10,6 +10,7 @@ type
 
     typeUnset
 
+    typeBuiltin
     typeBase
     typeType
 
@@ -31,7 +32,7 @@ type
       ptrRegion*: Type
     of typeRegion:
       regionName*: Token
-    of typeBase:
+    of typeBase, typeBuiltin:
       name*: string
     of typeType:
       baseType*: Type
@@ -41,7 +42,7 @@ proc eq*(a: Type, b: Type): bool =
   if a == nil or b == nil: return false
   if a.kind != b.kind: return false
 
-  if a.kind == typeBase:
+  if a.kind in {typeBase, typeBuiltin}:
     return a.name == b.name
 
   if a.kind == typeFunc:
@@ -85,6 +86,9 @@ proc getPtrType*(baseType: Type, region: Type): Type {.deprecated, inline.} =
 proc getRegionType*(name: Token): Type {.deprecated, inline.} =
   Type(kind: typeRegion, regionName: name)
 
+proc getBuiltinType*(name: string): Type {.inline.} =
+  Type(kind: typeBuiltin, name: name)
+
 proc getBaseType*(name: string): Type {.inline.} =
   Type(kind: typeBase, name: name)
 
@@ -100,6 +104,9 @@ proc getFuncType*(token: Token, argTypes: seq[ArgType], returnType: Type): Type 
 proc getPtrType*(token: Token, baseType: Type, region: Type): Type {.deprecated, inline.} =
   Type(kind: typePtr, token: token, ptrBase: baseType, ptrRegion: region)
 
+proc getBuiltinType*(token: Token): Type {.inline.} =
+  Type(kind: typeBuiltin, token: token, name: token.lexeme)
+
 proc getBaseType*(token: Token): Type {.inline.} =
   Type(kind: typeBase, token: token, name: token.lexeme)
 
@@ -113,8 +120,9 @@ proc `$`*(k: TypeKind): string {.inline.} =
 
   of typeRegion:    "region"
 
-  of typeUnset:     "unset"
+  of typeUnset:     "Unset"
 
+  of typeBuiltin:   "builtin-type"
   of typeBase:      "base-type"
   of typeType:      "Type"
 
@@ -136,7 +144,7 @@ proc `$`*(t: Type): string =
     return $t.ptrBase & "^" & $t.ptrRegion.regionName.lexeme
   of typeRegion:
     return "region '" & $t.regionName.lexeme & "'"
-  of typeBase:
+  of typeBase, typeBuiltin:
     return $t.name
   of typeType:
     return "Type[" & $t.baseType & "]"

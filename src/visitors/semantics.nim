@@ -69,25 +69,31 @@ macro builtinType(name: untyped): untyped =
   return quote do:
     ctx.builtins.`name`.symbolType.baseType
 
-proc unwrapType(ctx: Context, typ: Type): Option[Type] =
-  if typ.kind == typeBase: 
+proc unwrapType(ctx: Context, typ: Type, error: static[bool] = true): Option[Type] =
+  if typ.kind == typeBuiltin:
+    return some(typ)
+
+  elif typ.kind == typeBase: 
     if not ctx.symbolExists(typ.name):
-      newError(errUndeclaredSymbol, typ.token, typ.name)
+      when error:
+        newError(errUndeclaredSymbol, typ.token, typ.name)
       return none(Type)
     let sym = ctx.getSymbol(typ.name)
-    return ctx.unwrapType(sym.symbolType)
+    return ctx.unwrapType(sym.symbolType, error)
 
   elif typ.kind == typeType:
-    return some(typ.baseType)
+    let unwrapped = ctx.unwrapType(typ.baseType, error)
+    if unwrapped.isNone: return none(Type)
+    return some(unwrapped.get())
 
   elif typ.kind == typeFunc:
     var newArgTypes: seq[ArgType]
     for arg in typ.argTypes:
-      let unwrapped = ctx.unwrapType(arg.argType)
+      let unwrapped = ctx.unwrapType(arg.argType, error)
       if unwrapped.isNone: return none(Type)
       newArgTypes.add(ArgType(name: arg.name, argType: unwrapped.get(), mutable: arg.mutable))
     
-    let returnUnwrapped = ctx.unwrapType(typ.returnType)
+    let returnUnwrapped = ctx.unwrapType(typ.returnType, error)
     if returnUnwrapped.isNone: return none(Type)
     
     return some(getFuncType(newArgTypes, returnUnwrapped.get()))
@@ -95,13 +101,32 @@ proc unwrapType(ctx: Context, typ: Type): Option[Type] =
   else:
     return none(Type)
 
+proc unwrappedType(ctx: Context, typ: Type): string =
+  let unwrapped = ctx.unwrapType(typ, false).get(getUnsetType())
+  if typ.kind == typeBase: 
+    let defined = if unwrapped.kind != typeUnset: "alias " & $unwrapped
+      else: "which undefined"
+    return fmt"{typ.name} {defined}"
+  return $unwrapped
+
+proc eq*(ctx: Context, a: Type, b: Type): bool
+
+proc eq*(ctx: Context, a: seq[ArgType], b: seq[ArgType]): bool =
+  if a.len != b.len: return false
+  for n in 0..a.high:
+    let arg_a = a[n]
+    let arg_b = b[n]
+    if not(ctx.eq(arg_a.argType, arg_b.argType) and arg_a.mutable == arg_b.mutable):
+      return false
+  return true
+
 proc eq*(ctx: Context, a: Type, b: Type): bool =
   var aTypeOption = ctx.unwrapType(a)
-  if not aTypeOption.isSome: return
+  if not aTypeOption.isSome: return false
   var aType = aTypeOption.get()
 
   var bTypeOption = ctx.unwrapType(b)
-  if not bTypeOption.isSome: return
+  if not bTypeOption.isSome: return false
   var bType = bTypeOption.get()
 
   if types.eq(aType, builtinType(Number)) and (
@@ -112,6 +137,13 @@ proc eq*(ctx: Context, a: Type, b: Type): bool =
   if types.eq(bType, builtinType(Number)) and ( 
     types.eq(aType, builtinType(Int))
   ): return true
+
+  if aType.kind == typeFunc and bType.kind == typeFunc:
+    if aType.argTypes.len != bType.argTypes.len: return false
+
+    if not ctx.eq(aType.argTypes, bType.argTypes): return false
+
+    return ctx.eq(aType.returnType, bType.returnType)
 
   return types.eq(aType, bType)
 
@@ -138,7 +170,7 @@ proc visitUnaryExpression(ctx: Context, node: UnaryExpression) =
     node.setType(ctx, node.value.exprType)
 
   else:
-    newError(errUnaryTypeMismatch, node.token, node.token.lexeme, typ)
+    newError(errUnaryTypeMismatch, node.token, node.token.lexeme, ctx.unwrappedType(typ))
 
 proc isMutableExpression(ctx: Context, node: Expression): Option[bool] =
   case node.kind:
@@ -185,7 +217,7 @@ proc visitBinaryExpression(ctx: Context, node: BinaryExpression) =
         typ = getPtrType(node.right.exprType, typ)
         break opSemantics
 
-      newError(errBinaryTypeMismatch, node.token, node.token.lexeme, node.left.exprType, node.right.exprType)
+      newError(errBinaryTypeMismatch, node.token, node.token.lexeme, ctx.unwrappedType(node.left.exprType), ctx.unwrappedType(node.right.exprType))
       break typeSemantics
     
     node.setType(ctx, typ)
@@ -213,15 +245,6 @@ proc toArgTypes(ctx: Context, args: seq[Expression]): seq[ArgType] =
       mutable: isMutable.get()
     )
 
-proc eq(ctx: Context, a: seq[ArgType], b: seq[ArgType]): bool =
-  if a.len != b.len: return false
-  for n in 0..a.high:
-    let arg_a = a[n]
-    let arg_b = b[n]
-    if not(ctx.eq(arg_a.argType, arg_b.argType) and arg_a.mutable == arg_b.mutable):
-      return false
-  return true
-
 proc visitCallExpression(ctx: Context, node: CallExpression) =
   ctx.visit(node.value)
 
@@ -229,7 +252,7 @@ proc visitCallExpression(ctx: Context, node: CallExpression) =
 
   block semantics:
     if valueType.neq typeFunc:
-      newError(errCallNonFunc, node.value.token, valueType)
+      newError(errCallNonFunc, node.value.token, ctx.unwrappedType(valueType))
       break semantics
 
     let expectedArgTypes = @[valueType]
@@ -252,7 +275,7 @@ proc visitCallExpression(ctx: Context, node: CallExpression) =
       
       newError(
         errNoMatchesCallForm, node.token,
-        funcName, "T" & $givenArgTypes, expectedArgTypes.mapIt("- " & $it).join("\n")
+        funcName, "T" & $givenArgTypes, expectedArgTypes.mapIt("- " & $ctx.unwrappedType(it)).join("\n")
       )
       break semantics
 
@@ -262,7 +285,7 @@ proc visitDerefExpression(ctx: Context, node: DerefExpression) =
   ctx.visit(node.value)
 
   if node.value.exprType.neq typePtr:
-    newError(errTypeMismatch, node.value.token, typePtr, node.value.exprType)
+    newError(errTypeMismatch, node.value.token, typePtr, ctx.unwrappedType(node.value.exprType))
 
   else:
     node.setType(ctx, node.value.exprType.ptrBase)
@@ -307,7 +330,7 @@ proc visitFuncExpression(ctx: Context, node: FuncExpression) =
 
   if not ctx.eq(ctx.expectedReturnType, getUnsetType()):
     if not checkReturnPaths(node.funcBlock):
-      newError(errMissingReturn, node.token, node.exprType)
+      newError(errMissingReturn, node.token, ctx.unwrappedType(node.exprType))
 
   for arg in node.exprType.argTypes:
     ctx.newSymbol(copy(node.token, kind = tkIdent, lexeme = arg.name), arg.argType, arg.mutable)
@@ -330,7 +353,7 @@ proc visitDeclarationStatement(ctx: Context, node: DeclarationStatement) =
     ctx.visit(node.value)
 
     if ctx.neq(node.value.exprType, node.valueType):
-      newError(errDeclarationTypeMismatch, node.token, node.valueType, node.name.lexeme, node.value.exprType)
+      newError(errDeclarationTypeMismatch, node.token, ctx.unwrappedType(node.valueType), node.name.lexeme, ctx.unwrappedType(node.value.exprType))
       break semantics
 
     if ctx.symbolExistsInCurrentScope(node.name.lexeme):
@@ -357,7 +380,7 @@ proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement) =
     case node.left.kind:
     of exprIdent, exprDeref:
       if ctx.neq(node.left.exprType, node.right.exprType):
-        newError(errTypeMismatch, node.token, node.left.exprType, node.right.exprType)
+        newError(errTypeMismatch, node.token, ctx.unwrappedType(node.left.exprType), ctx.unwrappedType(node.right.exprType))
 
     else:
       echo "Unhandled assignment"
@@ -366,7 +389,7 @@ proc visitAssignmentStatement(ctx: Context, node: AssignmentStatement) =
 proc visitBranchingStatement(ctx: Context, node: BranchingStatement) =
   ctx.visit(node.condition)
   if ctx.neq(node.condition.exprType, builtinType(Bool)):
-    newError(errTypeMismatch, node.condition.token, node.condition.exprType, builtinType(Bool))
+    newError(errTypeMismatch, node.condition.token, ctx.unwrappedType(node.condition.exprType), builtinType(Bool))
   
   else:
     ctx.pushScope()
@@ -376,7 +399,7 @@ proc visitBranchingStatement(ctx: Context, node: BranchingStatement) =
   for elifBranch in node.elifBranches:
     ctx.visit(elifBranch.cond)
     if ctx.neq(elifBranch.cond.exprType, builtinType(Bool)):
-      newError(errTypeMismatch, elifBranch.cond.token, elifBranch.cond.exprType, builtinType(Bool))
+      newError(errTypeMismatch, elifBranch.cond.token, ctx.unwrappedType(elifBranch.cond.exprType), builtinType(Bool))
 
     else:
       ctx.pushScope()
@@ -391,7 +414,7 @@ proc visitBranchingStatement(ctx: Context, node: BranchingStatement) =
 proc visitWhileStatement(ctx: Context, node: WhileStatement) =
   ctx.visit(node.condition)
   if ctx.neq(node.condition.exprType, builtinType(Bool)):
-    newError(errTypeMismatch, node.condition.token, node.condition.exprType, builtinType(Bool))
+    newError(errTypeMismatch, node.condition.token, ctx.unwrappedType(node.condition.exprType), builtinType(Bool))
 
   else:
     ctx.pushScope()
@@ -418,11 +441,11 @@ proc visitReturnStatement(ctx: Context, node: ReturnStatement) =
       newError(errReturnValue, node.token)
   else:
     if node.value == nil:
-      newError(errReturnTypeMismatch, node.token, ctx.expectedReturnType, getUnsetType())
+      newError(errReturnTypeMismatch, node.token, ctx.unwrappedType(ctx.expectedReturnType), getUnsetType())
     else:
       ctx.visit(node.value)
       if ctx.neq(node.value.exprType, ctx.expectedReturnType):
-        newError(errReturnTypeMismatch, node.token, ctx.expectedReturnType, node.value.exprType)
+        newError(errReturnTypeMismatch, node.token, ctx.unwrappedType(ctx.expectedReturnType), ctx.unwrappedType(node.value.exprType))
 
 proc visitCallStatement(ctx: Context, node: CallStatement) =
   ctx.visit(node.expr)
@@ -469,7 +492,7 @@ proc visitDefStatement(ctx: Context, node: DefStatement) =
         fmt"{typeFunc} do ... end",
         fmt"{typeType}"
       ]
-      newError(errUnsupportedDefinition, node.value.token, constructs.mapIt(fmt"- def {node.name.lexeme} = " & it).join("\n"), node.value.exprType)
+      newError(errUnsupportedDefinition, node.value.token, constructs.mapIt(fmt"- def {node.name.lexeme} = " & it).join("\n"), ctx.unwrappedType(node.value.exprType))
       break semantics
 
     if node.value.kind notin specials or node.value.kind == exprKindType:
@@ -508,7 +531,7 @@ proc visit(ctx: Context, node: Statement) =
 macro newTypeSymbol(name: untyped): untyped =
   let strName = $name
   return quote do:
-    newSymbolGet(ctx, Token(kind: tkType, lexeme: `strName`), getTypeType(getBaseType(`strName`)), false)
+    newSymbolGet(ctx, Token(kind: tkType, lexeme: `strName`), getTypeType(getBuiltinType(`strName`)), false)
 
 macro newSymbol(name: untyped, typ: Type): untyped =
   let strName = $name

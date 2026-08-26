@@ -28,7 +28,7 @@ proc nimtype(t: Type): string =
     for i, argt in t.argTypes:
       if i != 0: args &= ", "
       let isVar = if argt.mutable: " var" else: ""
-      args &= fmt"{argt.name}:{isVar} {nimtype(argt.argType)}"
+      args &= fmt"{ident(argt.name)}:{isVar} {nimtype(argt.argType)}"
     if t.returnType.neq(getUnsetType()):
       return fmt"proc ({args}): {nimtype(t.returnType)}"
     return fmt"proc ({args})"

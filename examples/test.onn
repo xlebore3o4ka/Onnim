@@ -1,6 +1,5 @@
-def A = Int(Int a, Int b)
+def A = Int(Int a, Int c)
 def test = Int(Int a, Int b) do
   return a + b
 end
-
-A x = test
+A add = test

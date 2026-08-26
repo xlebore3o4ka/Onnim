@@ -1,0 +1,112 @@
+{
+  "errSyntaxChar": {
+    "message": "Unknown character: '@0'",
+    "note": "",
+    "tip": ""
+  },
+  "errSyntaxParenthesis": {
+    "message": "@0 parenthesis",
+    "note": "You missed the opposite side of the bracket ‘@0'",
+    "tip": "Each open bracket, such as `({[` must be closed with `)}]`"
+  },
+  "errExpectedSyntax": {
+    "message": "Expected @0, got @1",
+    "note": "",
+    "tip": "Try replacing @0 with @1"
+  },
+  "errExpression": {
+    "message": "Invalid expression: @0",
+    "note": "",
+    "tip": "An expression can be either a literal of a certain type (`10`, `true`), a specific identifier (`name`), mathematical calculations (`2 + 3`), rarely a type or function, etc."
+  },
+  "errStatement": {
+    "message": "Invalid statement: @0",
+    "note": "",
+    "tip": "A statement can only be a symbol declaration (`Int x = 10`, `def func = ...`), a branch (`if expr do ... end`, `while expr do ... end`), flow control (`return ...`, `continue`, `break`), etc."
+  },
+  "errType": {
+    "message": "Invalid type: @0",
+    "note": "The parser expected a type, instead of @0",
+    "tip": "All types are capitalized. Type example: `Int`, `Bool`, `Number(Int a, Int b)`"
+  },
+  "errUnaryTypeMismatch": {
+    "message": "Type mismatch for the unary operator @0: @1",
+    "note": "Unary operator '@0' requires specific operand types",
+    "tip": "A minus `-` or a plus `+` expects any `Number` after it. A bang `!` expects a `Bool`"
+  },
+  "errBinaryTypeMismatch": {
+    "message": "Type mismatch for the binary operator @0: @1 @0 @2",
+    "note": "Binary operator '@0' cannot operate on types @1 and @2. Consider using type conversion",
+    "tip": "Arithmetic operators `+-*/%` expect a `Number` on both sides. Boolean operators expect a `Bool` value"
+  },
+  "errDeclarationTypeMismatch": {
+    "message": "Expected @0 for @1, got @2",
+    "note": "",
+    "tip": "Try changing your definition to `@2 @1 = ...` or modify the expression so that it returns @0."
+  },
+  "errTypeMismatch": {
+    "message": "Expected @0, got @1",
+    "note": "",
+    "tip": ""
+  },
+  "errRedeclaration": {
+    "message": "Redeclaration symbol '@0', originally declared in @1(@2:@3)",
+    "note": "",
+    "tip": "Use a different name or different scope"
+  },
+  "errUndeclaredSymbol": {
+    "message": "Undeclared symbol '@0'",
+    "note": "Symbol '@0' is not defined. Check for typos, modules, or declaration order",
+    "tip": "Symbols from libraries should be used with an explicit indication of the source, like `lib.name`"
+  },
+  "errControlFlowOutsideLoop": {
+    "message": "'@0' statement outside of loop",
+    "note": "",
+    "tip": "Create a loop: `while expr do ... end`"
+  },
+  "errReturnOutsideFunc": {
+    "message": "Return statement outside of function",
+    "note": "",
+    "tip": "Define your function: `def add = Int(Int a, Int b) do ... end`"
+  },
+  "errReturnValue": {
+    "message": "Function should not return anything",
+    "note": "Function without return type cannot return a value. Either add a return type or remove the value",
+    "tip": "Use `return` to terminate the function execution early"
+  },
+  "errReturnTypeMismatch": {
+    "message": "Function returns @0, got @1",
+    "note": "",
+    "tip": "If you want the function to return nothing, use `Unset` as the return value."
+  },
+  "errCallNonFunc": {
+    "message": "Cannot call non-function value of type '@0'",
+    "note": "",
+    "tip": "Define your function: `def add = Int(Int a, Int b) do ... end`"
+  },
+  "errNoMatchesCallForm": {
+    "message": "No matches found for the expected @0 call form @1, expected one of:\n@2",
+    "note": "",
+    "tip": "Mutability definition difference: `sym$` - mutable; `sym!` - immutable. Defining a symbol makes it mutable, but function argument symbols are immutable by default"
+  },
+  "errMissingReturn": {
+    "message": "Function @0 does not return a value on all paths",
+    "note": "Check the conditional branches, they may not return a value in some paths",
+    "tip": ""
+  },
+  "errReturnInsideRegion": {
+    "message": "Return statement is not allowed inside region",
+    "note": "Return statement is not allowed inside region blocks. Move the return statement to the end of the region statement.",
+    "tip": ""
+  },
+  "errUnsupportedDefinition": {
+    "message": "You can only define comptime or one of <read below> constructs, got @1\n@0",
+    "note": "You can only define a value that is known at the compilation time, or one of the following constructs <read above>",
+    "tip": "All types are capitalized. Type example: `Int`, `Bool`, `Number(Int a, Int b)`"
+  },
+  "errExpectedMutable": {
+    "message": "Expression is immutable",
+    "note": "Expression is immutable. Declare the symbol as mutable or use a different approach",
+    "tip": "Mutability definition difference: `sym$` - mutable; `sym!` - immutable. Defining a symbol makes it mutable, but function argument symbols are immutable by default"
+  }
+}

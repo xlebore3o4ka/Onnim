@@ -26,103 +26,8 @@ type
     col*: Positive
     len*: Positive
     args*: seq[string]
-    message*: string
 
 var errors*: seq[Error]
-
-proc message(kind: ErrorKind): string =
-  case kind:
-  of errSyntaxChar:              "Unknown character: '@0'"
-  of errSyntaxParenthesis:       "@0 parenthesis"
-
-  of errExpectedSyntax:          "Expected @0, got @1"
-  of errExpression:              "Invalid expression: @0"
-  of errStatement:               "Invalid statement: @0"
-  of errType:                    "Invalid type: @0"
-
-  of errUnaryTypeMismatch:       "Type mismatch for the unary operator @0: @1"
-  of errBinaryTypeMismatch:      "Type mismatch for the binary operator @0: @1 @0 @2"
-  of errDeclarationTypeMismatch: "Expected @0 for @1, got @2"
-  of errTypeMismatch:            "Expected @0, got @1"
-  of errRedeclaration:           "Redeclaration symbol '@0', originally declared in @1(@2:@3)"
-  of errUndeclaredSymbol:        "Undeclared symbol '@0'"
-
-  of errControlFlowOutsideLoop:  "'@0' statement outside of loop"
-
-  of errReturnOutsideFunc:       "Return statement outside of function"
-  of errReturnValue:             "Function should not return anything"
-  of errReturnTypeMismatch:      "Function returns @0, got @1"
-  of errCallNonFunc:             "Cannot call non-function value of type '@0'"
-  of errNoMatchesCallForm:       "No matches found for the expected @0 call form @1, expected one of:\n@2"
-  of errMissingReturn:           "Function @0 does not return a value on all paths"
-  of errReturnInsideRegion:      "Return statement is not allowed inside region"
-
-  of errUnsupportedDefinition:   "You can only define comptime or one of <read below> constructs, got @1\n@0"
-
-  of errExpectedMutable:         "Expression is immutable"
-
-proc note(kind: ErrorKind): string =
-  case kind:
-  of errSyntaxChar:              ""
-  of errSyntaxParenthesis:       "You missed the opposite side of the bracket ‘@0'"
-
-  of errExpectedSyntax:          ""
-  of errExpression:              ""
-  of errStatement:               ""
-  of errType:                    "The parser expected a type, instead of @0"
-
-  of errUnaryTypeMismatch:       "Unary operator '@0' requires specific operand types"
-  of errBinaryTypeMismatch:      "Binary operator '@0' cannot operate on types @1 and @2. Consider using type conversion"
-  of errDeclarationTypeMismatch: ""
-  of errTypeMismatch:            ""
-  of errRedeclaration:           ""
-  of errUndeclaredSymbol:        "Symbol '@0' is not defined. Check for typos, modules, or declaration order"
-
-  of errControlFlowOutsideLoop:  ""
-
-  of errReturnOutsideFunc:       ""
-  of errReturnValue:             "Function without return type cannot return a value. Either add a return type or remove the value"
-  of errReturnTypeMismatch:      ""
-  of errCallNonFunc:             ""
-  of errNoMatchesCallForm:       ""
-  of errMissingReturn:           "Check the conditional branches, they may not return a value in some paths"
-  of errReturnInsideRegion:      "Return statement is not allowed inside region blocks. Move the return statement to the end of the region statement."
-
-  of errUnsupportedDefinition:   "You can only define a value that is known at the compilation time, or one of the following constructs <read above>"
-
-  of errExpectedMutable:         "Expression is immutable. Declare the symbol as mutable or use a different approach"
-
-proc tip(kind: ErrorKind): string =
-  case kind:
-  of errSyntaxChar:              ""
-  of errSyntaxParenthesis:       "Each open bracket, such as `({[` must be closed with `)}]`"
-
-  of errExpectedSyntax:          "Try replacing @0 with @1"
-  of errExpression:              "An expression can be either a literal of a certain type (`10`, `true`), a specific identifier (`name`), mathematical calculations (`2 + 3`), rarely a type or function, etc."
-  of errStatement:               "A statement can only be a symbol declaration (`Int x = 10`, `def func = ...`), a branch (`if expr do ... end`, `while expr do ... end`), " & 
-    "flow control (`return ...`, `continue`, `break`), etc."
-  of errType:                    "All types are capitalized. Type example: `Int`, `Bool`, `Number(Int a, Int b)`"
-
-  of errUnaryTypeMismatch:       "A minus `-` or a plus `+` expects any `Number` after it. A bang `!` expects a `Bool`"
-  of errBinaryTypeMismatch:      "Arithmetic operators `+-*/%` expect a `Number` on both sides. Boolean operators expect a `Bool` value"
-  of errDeclarationTypeMismatch: "Try changing your definition to `@2 @1 = ...` or modify the expression so that it returns @0."
-  of errTypeMismatch:            ""
-  of errRedeclaration:           "Use a different name or different scope"
-  of errUndeclaredSymbol:        "Symbols from libraries should be used with an explicit indication of the source, like `lib.name`"
-
-  of errControlFlowOutsideLoop:  "Create a loop: `while expr do ... end`"
-
-  of errReturnOutsideFunc:       "Define your function: `def add = Int(Int a, Int b) do ... end`"
-  of errReturnValue:             "Use `return` to terminate the function execution early"
-  of errReturnTypeMismatch:      "If you want the function to return nothing, use `Unset` as the return value."
-  of errCallNonFunc:             "Define your function: `def add = Int(Int a, Int b) do ... end`"
-  of errNoMatchesCallForm:       "Mutability definition difference: `sym$` - mutable; `sym!` - immutable. Defining a symbol makes it mutable, but function argument symbols are immutable by default"
-  of errMissingReturn:           ""
-  of errReturnInsideRegion:      ""
-
-  of errUnsupportedDefinition:   "All types are capitalized. Type example: `Int`, `Bool`, `Number(Int a, Int b)`"
-
-  of errExpectedMutable:         "Mutability definition difference: `sym$` - mutable; `sym!` - immutable. Defining a symbol makes it mutable, but function argument symbols are immutable by default"
 
 proc newError*(kind: ErrorKind, file: string, line, col: Positive, len: Positive, args: varargs[string, `$`]) {.inline.} =
   errors.add(Error(
@@ -131,8 +36,7 @@ proc newError*(kind: ErrorKind, file: string, line, col: Positive, len: Positive
     line: line,
     col: col,
     len: len,
-    args: @args,
-    message: kind.message
+    args: @args
   ))
 
 proc newError*(kind: ErrorKind, token: Token, args: varargs[string, `$`]) {.inline.} =
@@ -142,13 +46,42 @@ proc newError*(kind: ErrorKind, token: Token, args: varargs[string, `$`]) {.inli
     line: token.line,
     col: token.col,
     len: token.len,
-    args: @args,
-    message: kind.message
+    args: @args
   ))
 
-import std/[strutils, strformat, terminal, tables]
+import std/[strutils, strformat, terminal, tables, json]
 
 var fileCache: Table[string, seq[string]]
+var errorMessages*: Table[string, JsonNode]
+
+proc loadErrorMessages*(path: string) =
+  try:
+    let jsonContent = readFile(path)
+    let jsonNode = parseJson(jsonContent)
+    errorMessages = initTable[string, JsonNode]()
+    for key, value in jsonNode:
+      errorMessages[key] = value
+  except:
+    stderr.write "Warning: Failed to load error messages from ", path
+
+proc getErrorInfo(kind: ErrorKind): JsonNode =
+  let key = $kind
+  if key in errorMessages:
+    return errorMessages[key]
+  
+  result = newJObject()
+  result["message"] = %("<error reading file>")
+  result["note"] = %"The set of error messages was not found"
+  result["tip"] = %"Make sure the compiler has not been moved and the file for the selected locale exists"
+
+proc message(kind: ErrorKind): string =
+  getErrorInfo(kind)["message"].getStr()
+
+proc note(kind: ErrorKind): string =
+  getErrorInfo(kind)["note"].getStr()
+
+proc tip(kind: ErrorKind): string =
+  getErrorInfo(kind)["tip"].getStr()
 
 proc getLine(file: string, line: Natural): string {.inline.} =
   if file notin fileCache:
@@ -229,7 +162,7 @@ proc wrapText(text: string, prompt: static[string], maxLen: int = 80): string =
   return result
 
 proc format*(error: Error, short: bool): string =
-  var msg = error.message
+  var msg = error.kind.message
   for i, arg in error.args:
     msg = msg.replace("@" & $i, arg)
   
