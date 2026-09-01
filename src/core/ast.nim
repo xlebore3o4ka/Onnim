@@ -176,11 +176,6 @@ constructors:
       value*: Expression
       args*: seq[Expression]
 
-    DerefExpression* {.onnimnode: exprDeref.} = ref object of Expression
-      ## <value> ^
-      ## "^" = token
-      value*: Expression
-
     TypeExpression* {.onnimnode: exprKindType, comptime.} = ref object of Expression
       ## <type>
       ## type = token
@@ -255,9 +250,3 @@ constructors:
       ## def = token
       name*: Token
       value*: Expression
-
-    RegionStatement* {.onnimnode: stmtRegion, deprecated.} = ref object of Statement
-      ## region <name> <block>
-      ## region = token
-      name*: Token
-      regionBlock*: BlockStatement

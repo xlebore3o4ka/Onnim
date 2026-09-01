@@ -32,8 +32,6 @@ proc nimtype(t: Type): string =
     if t.returnType.neq(getUnsetType()):
       return fmt"proc ({args}): {nimtype(t.returnType)}"
     return fmt"proc ({args})"
-  of typePtr:
-    return fmt"uint #[ptr {nimtype(t.ptrBase)}]#"
   of typeBase:
     return "`" & t.name & "`"
   of typeType:
@@ -58,13 +56,6 @@ proc visitBinaryExpression(ctx: Context, node: BinaryExpression): string =
   var op = node.token.lexeme
   if node.token.kind == tkPercent:
     op = "mod"
-  elif node.token.kind == tkAt:
-    return apicall(
-      "addArena", 
-      ctx.visit(node.left), ctx.visit(node.right), 
-      module = "system",
-      types = @[nimtype(node.right.exprType)]
-    )
   return fmt"{ctx.visit(node.left)} {op} {ctx.visit(node.right)}"
 
 proc visitIdentExpression(ctx: Context, node: IdentExpression): string =
@@ -74,13 +65,6 @@ proc visitCallExpression(ctx: Context, node: CallExpression): string =
   let fn = ctx.visit(node.value)
   let args = node.args.mapIt( ctx.visit(it) ).join(", ")
   return fmt"{fn}({args})"
-
-proc visitDerefExpression(ctx: Context, node: DerefExpression): string =
-  return apicall("getArena", 
-    ident(node.value.exprType.ptrRegion.regionName.lexeme), ctx.visit(node.value), 
-    module = "system", 
-    types = @[nimtype(node.value.exprType.ptrBase)]
-  )
 
 proc visitFuncExpression(ctx: Context, node: FuncExpression): string =
   result = fmt"proc ("
@@ -137,9 +121,6 @@ proc visitReturnStatement(ctx: Context, node: ReturnStatement): string =
 proc visitCallStatement(ctx: Context, node: CallStatement): string =
   return (if node.expr.exprType.neq(getUnsetType()): "discard " else: "") & ctx.visit(node.expr)
 
-proc visitRegionStatement(ctx: Context, node: RegionStatement): string =
-  return apicall("region", node.name.lexeme, module="system") & ":" & ctx.visit(node.regionBlock)
-
 proc visitDefStatement(ctx: Context, node: DefStatement): string =
   if node.value.kind == exprFunc:
     let fn = FuncExpression(node.value)
@@ -164,7 +145,6 @@ proc visit(ctx: Context, node: Expression): string =
   of exprBinary: return visitBinaryExpression(ctx, BinaryExpression(node))
   of exprIdent: return visitIdentExpression(ctx, IdentExpression(node))
   of exprCall: return visitCallExpression(ctx, CallExpression(node))
-  of exprDeref: return visitDerefExpression(ctx, DerefExpression(node))
   of exprFunc: return visitFuncExpression(ctx, FuncExpression(node))
   else: discard
 
@@ -179,7 +159,6 @@ proc visit(ctx: Context, node: Statement): string =
   of stmtBreak: return visitBreakStatement(ctx, BreakStatement(node))
   of stmtReturn: return visitReturnStatement(ctx, ReturnStatement(node))
   of stmtCall: return visitCallStatement(ctx, CallStatement(node))
-  of stmtRegion: return visitRegionStatement(ctx, RegionStatement(node))
   of stmtDef: return visitDefStatement(ctx, DefStatement(node))
   else: discard
 
@@ -190,8 +169,6 @@ proc generateCode*(node: Statement, stdpath: string): string =
   writeFile(builtinsPath, generateBuiltins())
   
   result = &"""import {stdpath}/[system, builtins]
-
-var s_region = onnim_system_newArena()  # DEPRECATED
 
 block transpiled:""" & ctx.visit(node) & "\n"
   ctx.indent.inc

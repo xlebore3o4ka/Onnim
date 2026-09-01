@@ -41,7 +41,7 @@ proc isExpression(self: Parser, token: Token): bool =
   token.kind in {tkLParen, tkNumber, tkTrue, tkFalse, tkIdent, tkBang, tkMinus, tkPlus, tkType}
 
 proc isType(self: Parser, token: Token): bool =
-  token.kind in {tkType, tkRegion}
+  token.kind in {tkType}
 
 proc parseType(self: var Parser, token: Token): Type =
   case token.kind:
@@ -51,7 +51,7 @@ proc parseType(self: var Parser, token: Token): Type =
     newError(errType, token, token.mean)
     result = getUnsetType(token)
 
-  while self.peekToken().kind in {tkLParen, tkCaret}:
+  while self.peekToken().kind in {tkLParen}:
     let tok = self.nextToken()
 
     if tok.kind == tkLParen:
@@ -74,12 +74,6 @@ proc parseType(self: var Parser, token: Token): Type =
 
       discard self.expectToken(tkRParen)
       result = getFuncType(token, argTypes, result)
-
-    elif tok.kind == tkCaret:
-      var region = self.nextToken()
-      if region.kind notin {tkRegion, tkIdent}:
-        newError(errExpectedSyntax, region, "one of " & tkRegion.mean & ", " & tkIdent.mean, region.kind.mean)
-      result = getPtrType(token, result, getRegionType(token))
 
 proc parseExpression(self: var Parser): Expression
 
@@ -120,7 +114,7 @@ proc parsePrimary(self: var Parser): Expression =
   elif token.kind in {tkTrue, tkFalse}:
     return newBoolExpression(token)
 
-  elif token.kind in {tkIdent, tkRegion}:
+  elif token.kind in {tkIdent}:
     var requireImmutable = false
     if self.peekToken().kind == tkBang:
       self.skipToken()
@@ -149,7 +143,7 @@ proc parsePrefix(self: var Parser): Expression =
 proc parsePostfix(self: var Parser): Expression =
   result = self.parsePrefix()
 
-  while (let token = self.peekToken(); token.kind in {tkLParen, tkCaret}):
+  while (let token = self.peekToken(); token.kind in {tkLParen}):
     if token.kind == tkLParen:
       self.skipToken()
 
@@ -163,10 +157,6 @@ proc parsePostfix(self: var Parser): Expression =
 
       discard self.expectToken(tkRParen)
       result = newCallExpression(token, result, args)
-
-    elif token.kind == tkCaret:
-      self.skipToken()
-      result = newDerefExpression(token, result)
 
 proc parseMulDiv(self: var Parser): Expression =
   result = self.parsePostfix()
@@ -208,16 +198,8 @@ proc parseOr(self: var Parser): Expression =
     let right = self.parseAnd()
     result = newBinaryExpression(op, result, right)
 
-proc parseAt(self: var Parser): Expression =
-  result = self.parseOr()
-
-  while self.lexer.peekToken().kind == tkAt:
-    let op = self.lexer.nextToken()
-    let right = self.parseOr()
-    result = newBinaryExpression(op, result, right)
-
 proc parseExpression(self: var Parser): Expression =
-  return self.parseAt()
+  return self.parseOr()
 
 proc parseDeclaration(self: var Parser): Statement =
   let valueType = self.parseType(self.nextToken())
@@ -276,14 +258,7 @@ proc parseReturn(self: var Parser): Statement =
     expression = self.parseExpression()
 
   return newReturnStatement(token, expression)
-
-proc parseRegion(self: var Parser): Statement {.deprecated.} =
-  let token = self.nextToken()
-  let name = self.expectToken(tkIdent)
-  let regionBlock = self.parseBlock(tkEnd)
-
-  return newRegionStatement(token, name, regionBlock)
-
+  
 proc parseDef(self: var Parser): Statement =
   let token = self.nextToken()
   let name = self.expectToken(tkIdent, tkType)
@@ -295,10 +270,7 @@ proc parseDef(self: var Parser): Statement =
 proc parseStatement(self: var Parser): Statement =
   let token = self.lexer.peekToken()
 
-  if token.kind == tkRegion:
-    return self.parseRegion()
-
-  elif self.isType(token):
+  if self.isType(token):
     return self.parseDeclaration()
 
   elif token.kind == tkIf:

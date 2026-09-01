@@ -1,5 +1,0 @@
-def A = Int(Int a, Int c)
-def test = Int(Int a, Int b) do
-  return a + b
-end
-A add = test

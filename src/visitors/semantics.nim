@@ -181,9 +181,6 @@ proc isMutableExpression(ctx: Context, node: Expression): Option[bool] =
     let sym = ctx.getSymbol(name)
     return some(sym.mutable and not IdentExpression(node).requireImmutable)
 
-  of exprDeref:
-    return ctx.isMutableExpression(DerefExpression(node).value)
-
   else:
     return some(false)
 
@@ -208,13 +205,6 @@ proc visitBinaryExpression(ctx: Context, node: BinaryExpression) =
         typ = builtinType(Bool)
         break opSemantics
       elif ctx.eq(typ, builtinType(Bool)) and op in {tkAnd, tkOr, tkEqualsEquals, tkBangEquals}: 
-        break opSemantics
-      elif eq(typ, typeRegion) and op == tkAt:
-        let isMutable = ctx.isMutableExpression(node.left)
-        if isMutable.isSome and not isMutable.get():
-          newError(errExpectedMutable, node.left.token)
-          break typeSemantics
-        typ = getPtrType(node.right.exprType, typ)
         break opSemantics
 
       newError(errBinaryTypeMismatch, node.token, node.token.lexeme, ctx.unwrappedType(node.left.exprType), ctx.unwrappedType(node.right.exprType))
@@ -281,15 +271,6 @@ proc visitCallExpression(ctx: Context, node: CallExpression) =
 
     node.setType(ctx, valueType.returnType)
 
-proc visitDerefExpression(ctx: Context, node: DerefExpression) =
-  ctx.visit(node.value)
-
-  if node.value.exprType.neq typePtr:
-    newError(errTypeMismatch, node.value.token, typePtr, ctx.unwrappedType(node.value.exprType))
-
-  else:
-    node.setType(ctx, node.value.exprType.ptrBase)
-
 proc checkReturnPaths(stmt: Statement): bool =
   case stmt.kind:
   of stmtReturn:
@@ -312,11 +293,6 @@ proc checkReturnPaths(stmt: Statement): bool =
       return true
     return false
   of stmtWhile:
-    return false
-  of stmtRegion:
-    let regionStmt = RegionStatement(stmt)
-    if checkReturnPaths(regionStmt.regionBlock):
-      newError(errReturnInsideRegion, regionStmt.token)
     return false
   else:
     return false
@@ -450,27 +426,6 @@ proc visitReturnStatement(ctx: Context, node: ReturnStatement) =
 proc visitCallStatement(ctx: Context, node: CallStatement) =
   ctx.visit(node.expr)
 
-proc visitRegionStatement(ctx: Context, node: RegionStatement) =
-  ctx.pushScope()
-
-  let temp = ctx.expectedRegion
-
-  block semantics:
-    if ctx.symbolExistsInCurrentScope(node.name.lexeme):
-      let symbol = ctx.getSymbol(node.name.lexeme)
-      let symbolToken = symbol.definitionToken
-      newError(errRedeclaration, node.name, symbolToken.lexeme, symbolToken.file, symbolToken.line, symbolToken.col)
-      break semantics
-
-    ctx.expectedRegion = getRegionType(node.name)
-    ctx.newSymbol(node.name, ctx.expectedRegion, true)
-
-  ctx.visit(node.regionBlock)
-
-  ctx.expectedRegion = temp
-  
-  ctx.popScope()
-
 proc visitDefStatement(ctx: Context, node: DefStatement) =
   const specials = {exprFunc, exprKindType}
 
@@ -509,7 +464,6 @@ proc visit(ctx: Context, node: Expression) =
   of exprBinary: visitBinaryExpression(ctx, BinaryExpression(node))
   of exprIdent: visitIdentExpression(ctx, IdentExpression(node))
   of exprCall: visitCallExpression(ctx, CallExpression(node))
-  of exprDeref: visitDerefExpression(ctx, DerefExpression(node))
   of exprFunc: visitFuncExpression(ctx, FuncExpression(node))
   else: discard
 
@@ -525,18 +479,17 @@ proc visit(ctx: Context, node: Statement) =
   of stmtReturn: visitReturnStatement(ctx, ReturnStatement(node))
   of stmtCall: visitCallStatement(ctx, CallStatement(node))
   of stmtDef: visitDefStatement(ctx, DefStatement(node))
-  of stmtRegion: visitRegionStatement(ctx, RegionStatement(node))
   else: discard
 
 macro newTypeSymbol(name: untyped): untyped =
   let strName = $name
   return quote do:
-    newSymbolGet(ctx, Token(kind: tkType, lexeme: `strName`), getTypeType(getBuiltinType(`strName`)), false)
+    newSymbolGet(ctx, Token(kind: tkType, lexeme: `strName`, file: "std/builtins"), getTypeType(getBuiltinType(`strName`)), false)
 
 macro newSymbol(name: untyped, typ: Type): untyped =
   let strName = $name
   return quote do:
-    newSymbolGet(ctx, Token(kind: tkIdent, lexeme: `strName`), `typ`, false)
+    newSymbolGet(ctx, Token(kind: tkIdent, lexeme: `strName`, file: "std/builtins"), `typ`, false)
 
 proc checkSemantics*(node: Statement) =
   var ctx = Context(
@@ -554,9 +507,5 @@ proc checkSemantics*(node: Statement) =
     BoolSym   = newTypeSymbol(Bool),
     wtiteSym  = newSymbol(write, getFuncType(@[ArgType(name: "a", argType: getBaseType("Number"), mutable: false)], getUnsetType()))
   )
-
-  let regionToken = Token(kind: tkIdent, lexeme: "region")
-  ctx.newSymbol(regionToken, getRegionType(regionToken), true)
-  ctx.expectedRegion = getRegionType(regionToken)
 
   ctx.visit(node)

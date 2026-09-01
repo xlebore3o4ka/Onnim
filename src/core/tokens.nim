@@ -8,7 +8,7 @@ type
 
     tkPlus, tkMinus, tkStar, tkSlash, tkPercent
     tkGT, tkLT, tkGTE, tkLTE, tkEqualsEquals, tkBangEquals
-    tkEquals, tkBang, tkComma, tkAt, tkCaret, tkDollar
+    tkEquals, tkBang, tkComma, tkDollar
 
     tkLParen, tkRParen
 
@@ -16,7 +16,6 @@ type
     tkIf, tkElif, tkElse, tkDo, tkEnd
     tkWhile, tkContinue, tkBreak
     tkReturn
-    tkRegion {.deprecated.}
     tkDef
 
     tkEOF
@@ -53,8 +52,6 @@ const operatorTable* = {
   "!": tkBang,
   "=": tkEquals,
   ",": tkComma,
-  "@": tkAt,
-  "^": tkCaret,
   "$": tkDollar,
 
   "(": tkLParen,
@@ -92,8 +89,6 @@ const keywordTable* = {
 
   "return": tkReturn,
 
-  "region": tkRegion,
-
   "def": tkDef
   
 }.toTable
@@ -124,8 +119,6 @@ proc mean*(kind: TokenKind): string =
   of tkBang:          return "bang operator '!'"
   of tkEquals:        return "equals operator '='"
   of tkComma:         return "comma operator ','"
-  of tkAt:            return "at operator '@'"
-  of tkCaret:         return "caret operator '^'"
   of tkDollar:        return "dollar operator '$'"
   
   of tkLParen:        return "left parenthesis '('"
@@ -147,8 +140,6 @@ proc mean*(kind: TokenKind): string =
   of tkBreak:         return "keyword 'break'"
 
   of tkReturn:        return "keyword 'return'"
-
-  of tkRegion:        return "keyword 'region'"
 
   of tkDef:           return "keyword 'def'"
   
